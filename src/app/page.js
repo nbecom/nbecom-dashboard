@@ -200,7 +200,7 @@ return(<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontW
 </div>
 <div style={{display:'flex',gap:8}}>
 <button onClick={()=>{setImg(editId,editUrl);setEditId(null)}} style={{...S.btn,background:'var(--green)',color:'#fff',flex:1}}>💾 Lưu</button>
-{listings.find(([l])=>l===editId)?.[1]?.link&&<a href={listings.find(([l])=>l===editId)[1].link} target="_blank" rel="noopener noreferrer" style={{...S.btn,background:'var(--accent)',color:'#fff',textDecoration:'none',textAlign:'center',flex:1}}>🔗 Mở trên Etsy</a>:null}
+{listings.find(([l])=>l===editId)?.[1]?.link?<a href={listings.find(([l])=>l===editId)[1].link} target="_blank" rel="noopener noreferrer" style={{...S.btn,background:'var(--accent)',color:'#fff',textDecoration:'none',textAlign:'center',flex:1}}>🔗 Mở trên Etsy</a>:null}
 </div>
 </div></div>}
 </div>)}
