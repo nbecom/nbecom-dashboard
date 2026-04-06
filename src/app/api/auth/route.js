@@ -209,6 +209,25 @@ export async function POST(request) {
       return NextResponse.json({ success: true, images: data ? (typeof data === 'string' ? JSON.parse(data) : data) : {} });
     }
 
+    // ====== SHOP MANAGEMENT (MỚI v5.1) ======
+    if (action === 'saveShops') {
+      const { token, shops } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      const sessionData = typeof session === 'string' ? JSON.parse(session) : session;
+      if (sessionData.role !== 'admin') return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+      await redis.set('custom_shops', JSON.stringify(shops));
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === 'loadShops') {
+      const { token } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      const data = await redis.get('custom_shops');
+      return NextResponse.json({ success: true, shops: data ? (typeof data === 'string' ? JSON.parse(data) : data) : [] });
+    }
+
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Auth error:', error);
