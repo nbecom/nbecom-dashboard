@@ -1,5 +1,5 @@
 import './globals.css';
-export const metadata = { title: 'NBECOM - Hệ thống quản lý nội bộ', description: 'Hệ thống quản lý đơn hàng Etsy - NBECOM' };
+export const metadata = { title: 'NBECOM v5 - Hệ thống quản lý nội bộ', description: 'Hệ thống quản lý đơn hàng Etsy - NBECOM v5.0' };
 export default function RootLayout({ children }) {
   return (
     <html lang="vi">
