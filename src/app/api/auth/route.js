@@ -118,9 +118,9 @@ export async function POST(request) {
       }
 
       const token = generateToken();
-      await redis.set(`session:${token}`, JSON.stringify({ username, role: user.role, fullName: user.fullName }), { ex: 86400 * 7 });
+      await redis.set(`session:${token}`, JSON.stringify({ username, role: user.role, fullName: user.fullName, shops: user.shops || [] }), { ex: 86400 * 7 });
 
-      return NextResponse.json({ success: true, token, user: { username, role: user.role, fullName: user.fullName, status: user.status } });
+      return NextResponse.json({ success: true, token, user: { username, role: user.role, fullName: user.fullName, status: user.status, shops: user.shops || [] } });
     }
 
     // ====== VERIFY SESSION ======
@@ -136,6 +136,12 @@ export async function POST(request) {
       }
 
       const sessionData = typeof session === 'string' ? JSON.parse(session) : session;
+      // Reload shops from user data
+      const userData = await redis.get(`user:${sessionData.username}`);
+      if (userData) {
+        const u = typeof userData === 'string' ? JSON.parse(userData) : userData;
+        sessionData.shops = u.shops || [];
+      }
       return NextResponse.json({ success: true, user: sessionData });
     }
 
@@ -159,7 +165,7 @@ export async function POST(request) {
         const userData = await redis.get(`user:${uname}`);
         if (userData) {
           const u = typeof userData === 'string' ? JSON.parse(userData) : userData;
-          users.push({ username: u.username, fullName: u.fullName, role: u.role, status: u.status, createdAt: u.createdAt });
+          users.push({ username: u.username, fullName: u.fullName, role: u.role, status: u.status, createdAt: u.createdAt, shops: u.shops || [] });
         }
       }
 
@@ -168,7 +174,7 @@ export async function POST(request) {
 
     // ====== UPDATE USER (admin only) ======
     if (action === 'updateUser') {
-      const { token, targetUsername, newRole, newStatus } = body;
+      const { token, targetUsername, newRole, newStatus, newShops } = body;
       const session = await redis.get(`session:${token}`);
       if (!session) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -187,6 +193,7 @@ export async function POST(request) {
       const user = typeof userData === 'string' ? JSON.parse(userData) : userData;
       if (newRole) user.role = newRole;
       if (newStatus) user.status = newStatus;
+      if (newShops !== undefined) user.shops = newShops;
 
       await redis.set(`user:${targetUsername}`, JSON.stringify(user));
 
