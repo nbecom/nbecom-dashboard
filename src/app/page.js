@@ -144,6 +144,17 @@ function detectProductFromName(itemName) {
   return 'Unknown';
 }
 
+// Auto-detect supplier based on product type
+const ZOOTOP_PRODUCTS = ['Hawaiian Shirt','Youth Hawaiian Shirt','Beach Short','Football Jersey','Kid Football Jersey','Linen Shirt','Baseball Jacket','Kid Baseball Jacket','Baseball Shirt','Kid Baseball Shirt','Zip Hoodie'];
+const TRIO_PRODUCTS = ['Keychain 7cm','Crochet 12cm','Crochet 20cm','Crochet 30cm'];
+const EMBROIDERY_PRODUCTS = ['T-Shirt','Sweatshirt','Hoodie','Quarter Zip','Baby Tee','Kid Sweatshirt','Kid Hoodie','Kid T-Shirt','Embroidered Cap','Wash Hat','Trucker Hat'];
+
+function autoDetectSupplier(productType) {
+  if (ZOOTOP_PRODUCTS.includes(productType)) return 'Zootop Bear';
+  if (TRIO_PRODUCTS.includes(productType)) return 'TRIO';
+  return null; // Embroidery - needs manual selection (Phương Nhi or Pet)
+}
+
 function getBasecost(productType, size, supplier) {
   const sd = BASECOST_DB[supplier]; if (!sd) return 0;
   const pd = sd[productType]; if (!pd) return 0;
@@ -153,7 +164,7 @@ function getBasecost(productType, size, supplier) {
   return sz[0];
 }
 
-function processCSV(rows, shopName, supplier) {
+function processCSV(rows, shopName, defaultEmbSupplier) {
   if (rows.length < 2) return [];
   const h = rows[0].map(x => x.toLowerCase().replace(/['"]/g, '').trim());
 
@@ -175,6 +186,7 @@ function processCSV(rows, shopName, supplier) {
     if (v === 'vat paid by buyer') col.vat = i;
     if (v === 'order id') col.orderId = i;
     if (v === 'transaction id') col.transId = i;
+    if (v === 'listing id') col.listingId = i;
     if (v === 'variations') col.variations = i;
     if (v === 'ship name' || v === 'full name') col.shipName = i;
     if (v === 'ship address1' || v === 'street 1') col.addr1 = i;
@@ -199,21 +211,23 @@ function processCSV(rows, shopName, supplier) {
     const date = r[col.date] || '';
     if (!date) continue;
 
-    // Parse variations to get product type, size, color
     const variationsRaw = col.variations !== undefined ? r[col.variations] : '';
     const itemName = col.itemName !== undefined ? r[col.itemName] : '';
     const parsed = parseVariations(variationsRaw);
 
-    // If variations didn't give product type, try item name
     let productType = parsed.productType;
     if (productType === 'Unknown' || productType === 'Additional Fee') {
       productType = detectProductFromName(itemName);
     }
-    // Skip additional fees
     if (parsed.productType === 'Additional Fee') continue;
 
     const size = parsed.size;
     const color = parsed.color;
+    const listingId = col.listingId !== undefined ? r[col.listingId] : '';
+
+    // Auto-detect supplier
+    const autoSupplier = autoDetectSupplier(productType);
+    const supplier = autoSupplier || defaultEmbSupplier || 'Phương Nhi';
 
     const qty = parseInt(r[col.qty] || '1') || 1;
     const price = parseFloat(r[col.price] || r[col.itemTotal] || r[col.orderValue] || '0') || 0;
@@ -222,7 +236,7 @@ function processCSV(rows, shopName, supplier) {
     const tax = parseFloat(r[col.tax] || r[col.vat] || '0') || 0;
 
     const revenue = price - discount;
-    const platformFee = revenue * 0.065 + 0.20 + revenue * 0.03; // Etsy: 6.5% transaction + $0.20 listing + 3% processing
+    const platformFee = revenue * 0.065 + 0.20 + revenue * 0.03;
     const basecost = getBasecost(productType, size, supplier) * qty;
     const profit = revenue - platformFee - tax - basecost;
 
@@ -231,6 +245,9 @@ function processCSV(rows, shopName, supplier) {
     orders.push({
       date,
       orderId: r[col.orderId] || r[col.transId] || `ORD-${i}`,
+      transId: r[col.transId] || '',
+      listingId,
+      etsyLink: listingId ? `https://www.etsy.com/listing/${listingId}` : '',
       shop: shopName,
       itemName: (itemName || '').substring(0, 100),
       productType,
@@ -252,6 +269,7 @@ function processCSV(rows, shopName, supplier) {
       basecost,
       profit,
       supplier,
+      autoSupplier: !!autoSupplier,
       sku: r[col.sku] || '',
       coupon: r[col.coupon] || '',
       dateShipped: r[col.dateShipped] || '',
@@ -522,41 +540,54 @@ function UserManagement({ token }) {
 // CSV UPLOAD MODULE (from v2)
 // ============================================
 function CSVUpload({ onData, data }) {
-  const [shop, setShop] = useState(''); const [supplier, setSupplier] = useState(''); const [month, setMonth] = useState('');
+  const [shop, setShop] = useState(''); const [embSupplier, setEmbSupplier] = useState('Phương Nhi'); const [month, setMonth] = useState('');
   const [dragging, setDragging] = useState(false); const [processing, setProcessing] = useState(false);
   const [fileName, setFileName] = useState(''); const [error, setError] = useState(''); const [preview, setPreview] = useState(null);
   const fileRef = useRef(null);
 
   const handleFile = useCallback((file) => {
     if (!shop) { setError('Chọn Shop trước'); return; }
-    if (!supplier) { setError('Chọn Supplier trước'); return; }
     setError(''); setFileName(file.name); setProcessing(true);
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const rows = parseCSVText(e.target.result);
-        const orders = processCSV(rows, shop, supplier);
-        if (!orders.length) { setError('Không tìm thấy đơn hàng'); setProcessing(false); return; }
+        const orders = processCSV(rows, shop, embSupplier);
+        if (!orders.length) { setError('Không tìm thấy đơn hàng. Hãy dùng file "Order Items" CSV từ Etsy.'); setProcessing(false); return; }
         setPreview({ total: orders.length, revenue: orders.reduce((s,o) => s+o.revenue, 0), profit: orders.reduce((s,o) => s+o.profit, 0), basecost: orders.reduce((s,o) => s+o.basecost, 0), orders });
         setProcessing(false);
       } catch (err) { setError('Lỗi: ' + err.message); setProcessing(false); }
     };
     reader.readAsText(file);
-  }, [shop, supplier]);
+  }, [shop, embSupplier]);
+
+  // Allow changing supplier per order in preview
+  const updateOrderSupplier = (idx, newSupplier) => {
+    if (!preview) return;
+    const updated = [...preview.orders];
+    const o = { ...updated[idx] };
+    o.supplier = newSupplier;
+    const bc = getBasecost(o.productType, o.size, newSupplier) * o.quantity;
+    o.basecost = bc;
+    o.profit = o.revenue - o.platformFee - o.tax - bc;
+    updated[idx] = o;
+    setPreview({ ...preview, orders: updated, basecost: updated.reduce((s,o) => s+o.basecost, 0), profit: updated.reduce((s,o) => s+o.profit, 0) });
+  };
 
   return (
     <div style={{ animation: 'fadeSlideUp 0.4s ease' }}>
-      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>📤 Upload CSV</h2>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>📤 Upload CSV — Order Items</h2>
       <div style={{ ...S.card, marginBottom: 20 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
           <div><label style={{ fontSize: 12, color: 'var(--text-dim)', display: 'block', marginBottom: 6 }}>SHOP</label>
             <select style={{ ...S.select, width: '100%' }} value={shop} onChange={e => setShop(e.target.value)}>
-              <option value="">-- Chọn --</option>{SHOPS.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+              <option value="">-- Chọn Shop --</option>{SHOPS.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
             </select></div>
-          <div><label style={{ fontSize: 12, color: 'var(--text-dim)', display: 'block', marginBottom: 6 }}>SUPPLIER</label>
-            <select style={{ ...S.select, width: '100%' }} value={supplier} onChange={e => setSupplier(e.target.value)}>
-              <option value="">-- Chọn --</option><option value="Phương Nhi">Phương Nhi</option><option value="Pet">Pet</option><option value="Zootop Bear">Zootop Bear</option><option value="TRIO">TRIO</option>
-            </select></div>
+          <div><label style={{ fontSize: 12, color: 'var(--text-dim)', display: 'block', marginBottom: 6 }}>SUPPLIER THÊU MẶC ĐỊNH</label>
+            <select style={{ ...S.select, width: '100%' }} value={embSupplier} onChange={e => setEmbSupplier(e.target.value)}>
+              <option value="Phương Nhi">Phương Nhi</option><option value="Pet">Pet</option>
+            </select>
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>3D → Zootop Bear, Crochet → TRIO (tự động)</div></div>
           <div><label style={{ fontSize: 12, color: 'var(--text-dim)', display: 'block', marginBottom: 6 }}>THÁNG</label>
             <select style={{ ...S.select, width: '100%' }} value={month} onChange={e => setMonth(e.target.value)}>
               <option value="">-- Chọn --</option>{['01','02','03','04','05','06','07','08','09','10','11','12'].map(m => <option key={m} value={`2026-${m}`}>Tháng {parseInt(m)}/2026</option>)}
@@ -571,20 +602,53 @@ function CSVUpload({ onData, data }) {
           <input ref={fileRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={e => e.target.files[0] && handleFile(e.target.files[0])} />
           {processing ? <div style={{ color: 'var(--text-muted)' }}>⏳ Đang xử lý...</div> :
             fileName ? <div><div style={{ fontSize: 36 }}>📄</div><div style={{ color: 'var(--accent)', fontWeight: 600 }}>{fileName}</div></div> :
-            <div><div style={{ fontSize: 48, marginBottom: 8 }}>📁</div><div style={{ fontWeight: 600 }}>Kéo thả file CSV vào đây</div><div style={{ color: 'var(--text-dim)', fontSize: 13 }}>hoặc click để chọn</div></div>}
+            <div><div style={{ fontSize: 48, marginBottom: 8 }}>📁</div><div style={{ fontWeight: 600 }}>Kéo thả file CSV vào đây</div><div style={{ color: 'var(--text-dim)', fontSize: 13, marginTop: 4 }}>Etsy → Shop Manager → Settings → Download Data → <b>Order Items</b></div></div>}
         </div>
         {error && <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: 'rgba(239,68,68,0.1)', color: 'var(--red)', fontSize: 13 }}>⚠️ {error}</div>}
       </div>
       {preview && (
         <div style={{ ...S.card, marginBottom: 20, borderColor: 'var(--accent)' }}>
-          <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Xác nhận ({preview.total} đơn)</h3>
+          <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Xác nhận ({preview.total} đơn) — Kiểm tra supplier & basecost</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
             <div style={{ padding: 12, borderRadius: 8, background: 'rgba(16,185,129,0.08)' }}><div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Revenue</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--green)', ...S.mono }}>{formatUSD(preview.revenue)}</div></div>
             <div style={{ padding: 12, borderRadius: 8, background: 'rgba(245,158,11,0.08)' }}><div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Basecost</div><div style={{ fontSize: 20, fontWeight: 700, color: 'var(--orange)', ...S.mono }}>{formatUSD(preview.basecost)}</div></div>
             <div style={{ padding: 12, borderRadius: 8, background: 'rgba(139,92,246,0.08)' }}><div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Profit</div><div style={{ fontSize: 20, fontWeight: 700, color: preview.profit >= 0 ? 'var(--green)' : 'var(--red)', ...S.mono }}>{formatUSD(preview.profit)}</div></div>
           </div>
+          <div style={{ maxHeight: 400, overflowY: 'auto', overflowX: 'auto', marginBottom: 16 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 2 }}>
+                <tr>{['#','Ngày','Sản phẩm','Size','Màu','Buyer','Supplier','Basecost','Revenue','Profit','Xem'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {preview.orders.map((o, i) => (
+                  <tr key={i}>
+                    <td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{i+1}</td>
+                    <td style={{...S.td,fontSize:12}}>{o.date}</td>
+                    <td style={{...S.td,fontWeight:600}}>{o.productType}</td>
+                    <td style={{...S.td,...S.mono,textAlign:'center'}}>{o.size}</td>
+                    <td style={{...S.td,fontSize:12}}>{o.color}</td>
+                    <td style={{...S.td,fontSize:12,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.buyer}</td>
+                    <td style={S.td}>
+                      {o.autoSupplier ? (
+                        <span style={S.badge('var(--green)')}>{o.supplier} ✓</span>
+                      ) : (
+                        <select style={{...S.select, fontSize: 11, padding: '3px 6px'}} value={o.supplier} onChange={e => updateOrderSupplier(i, e.target.value)}>
+                          <option value="Phương Nhi">Phương Nhi</option>
+                          <option value="Pet">Pet</option>
+                        </select>
+                      )}
+                    </td>
+                    <td style={{...S.td,...S.mono,color:'var(--orange)'}}>{formatUSD(o.basecost)}</td>
+                    <td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{formatUSD(o.revenue)}</td>
+                    <td style={{...S.td,...S.mono,fontWeight:600,color:o.profit>=0?'var(--green)':'var(--red)'}}>{formatUSD(o.profit)}</td>
+                    <td style={S.td}>{o.etsyLink ? <a href={o.etsyLink} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', fontSize: 12 }}>🔗 Etsy</a> : '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <button onClick={() => { onData(prev => [...prev, ...preview.orders]); setPreview(null); setFileName(''); }} style={{ ...S.btn, background: 'var(--green)', color: '#fff', flex: 1 }}>✅ Xác nhận & Lưu</button>
+            <button onClick={() => { onData(prev => [...prev, ...preview.orders]); setPreview(null); setFileName(''); }} style={{ ...S.btn, background: 'var(--green)', color: '#fff', flex: 1 }}>✅ Xác nhận & Lưu ({preview.total} đơn)</button>
             <button onClick={() => { setPreview(null); setFileName(''); }} style={{ ...S.btn, background: 'var(--border)', color: 'var(--text-muted)' }}>Hủy</button>
           </div>
         </div>
@@ -713,24 +777,25 @@ export default function Home() {
         <div style={{ animation: 'fadeSlideUp 0.4s ease' }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>📦 Đơn hàng ({allOrders.length})</h2>
           {allOrders.length === 0 ? <div style={{ ...S.card, textAlign: 'center', padding: 60 }}><div style={{ fontSize: 48 }}>📭</div><div style={{ color: 'var(--text-muted)', marginTop: 12 }}>Chưa có dữ liệu</div></div> :
-          <div style={S.card}><div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1200 }}><thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 2 }}><tr>{['#','Ngày','Order ID','Shop','Sản phẩm','Size','Màu','SKU','Buyer','Địa chỉ','Quốc gia','Revenue','Fee','Basecost','Profit','Trạng thái'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{allOrders.slice(0,200).map((o,i) => (
+          <div style={S.card}><div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1400 }}><thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 2 }}><tr>{['#','Ngày','Order ID','Shop','Sản phẩm','Size','Màu','SKU','Supplier','Buyer','Địa chỉ ship','Quốc gia','Revenue','Basecost','Profit','TT','Xem'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{allOrders.slice(0,200).map((o,i) => (
             <tr key={i} onMouseEnter={e=>e.currentTarget.style.background='var(--card-hover)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
               <td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{i+1}</td>
               <td style={{...S.td,fontSize:12,whiteSpace:'nowrap'}}>{o.date}</td>
               <td style={{...S.td,...S.mono,color:'var(--accent)',fontSize:11}}>{o.orderId}</td>
               <td style={S.td}><span style={S.badge('var(--accent)')}>{o.shop.substring(0,15)}</span></td>
-              <td style={{...S.td,fontWeight:600,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.productType}</td>
+              <td style={{...S.td,fontWeight:600}}>{o.productType}</td>
               <td style={{...S.td,...S.mono,textAlign:'center'}}>{o.size}</td>
               <td style={{...S.td,fontSize:12}}>{o.color}</td>
-              <td style={{...S.td,...S.mono,fontSize:11,color:'var(--text-dim)'}}>{o.sku}</td>
+              <td style={{...S.td,...S.mono,fontSize:10,color:'var(--text-dim)'}}>{o.sku}</td>
+              <td style={S.td}><span style={S.badge(o.supplier==='Zootop Bear'?'var(--orange)':o.supplier==='TRIO'?'var(--purple)':'var(--green)')}>{o.supplier}</span></td>
               <td style={{...S.td,fontSize:12,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.buyer}</td>
-              <td style={{...S.td,fontSize:11,color:'var(--text-dim)',maxWidth:150,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.address}</td>
+              <td style={{...S.td,fontSize:11,color:'var(--text-dim)',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.address}</td>
               <td style={{...S.td,fontSize:11}}>{o.country}</td>
               <td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{formatUSD(o.revenue)}</td>
-              <td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{formatUSD(o.platformFee)}</td>
               <td style={{...S.td,...S.mono,color:'var(--orange)'}}>{formatUSD(o.basecost)}</td>
               <td style={{...S.td,...S.mono,fontWeight:600,color:o.profit>=0?'var(--green)':'var(--red)'}}>{formatUSD(o.profit)}</td>
-              <td style={S.td}><span style={S.badge(o.status==='Shipped'?'var(--green)':o.status==='Paid'?'var(--accent)':'var(--orange)')}>{o.status}</span></td>
+              <td style={S.td}><span style={S.badge(o.status==='Shipped'?'var(--green)':o.status==='Paid'?'var(--accent)':'var(--orange)')}>{o.status==='Shipped'?'✓':o.status==='Paid'?'$':'⏳'}</span></td>
+              <td style={S.td}>{o.etsyLink ? <a href={o.etsyLink} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: 16 }} title="Xem trên Etsy">🔗</a> : '-'}</td>
             </tr>
           ))}</tbody></table>{allOrders.length > 200 && <div style={{textAlign:'center',padding:12,color:'var(--text-dim)',fontSize:13}}>Hiển thị 200/{allOrders.length} đơn</div>}</div></div>}
         </div>
