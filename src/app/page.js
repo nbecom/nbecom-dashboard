@@ -59,17 +59,19 @@ const ROLES = { admin: 'Admin', manager: 'Manager', designer: 'Designer', sale: 
 const ROLE_COLORS = { admin: '#ef4444', manager: '#3b82f6', designer: '#8b5cf6', sale: '#10b981', pending: '#64748b' };
 
 // ============================================
-// CSV PROCESSING (same as v2)
+// CSV PROCESSING - ETSY ORDER ITEMS FORMAT
 // ============================================
 function parseCSVText(text) {
   const lines = []; let current = ''; let inQ = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (ch === '"') { inQ = !inQ; current += ch; }
-    else if (ch === '\n' && !inQ) { lines.push(current); current = ''; }
-    else { current += ch; }
+    else if ((ch === '\n' || (ch === '\r' && text[i+1] === '\n')) && !inQ) {
+      if (ch === '\r') i++;
+      lines.push(current); current = '';
+    } else { current += ch; }
   }
-  if (current) lines.push(current);
+  if (current.trim()) lines.push(current);
   return lines.map(line => {
     const cols = []; let col = ''; let q = false;
     for (let i = 0; i < line.length; i++) {
@@ -83,84 +85,179 @@ function parseCSVText(text) {
   });
 }
 
-function detectProductType(text) {
-  text = text.toLowerCase();
-  const types = ['kid baseball shirt','kid baseball jacket','kid football jersey','kid hoodie','kid sweatshirt','kid t-shirt',
-    'youth hawaiian shirt','baby tee','zip hoodie','quarter zip','baseball jacket','baseball shirt','hawaiian shirt',
-    'beach short','football jersey','linen shirt','trucker hat','wash hat','embroidered cap',
-    'hoodie','sweatshirt','t-shirt','tee','keychain','crochet 30cm','crochet 20cm','crochet 12cm','crochet'];
-  for (const t of types) {
-    if (text.includes(t)) {
-      if (t === 'tee' && !text.includes('baby tee')) return 'T-Shirt';
-      if (t === 'keychain') return 'Keychain 7cm';
-      if (t === 'crochet' && !text.includes('cm')) return 'Crochet 12cm';
-      return t.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+function parseVariations(variations) {
+  // Parse "Type:Sweatshirt - S,Color:Navy" or "Type:Hoodie - 3XL,Color:Black"
+  let productType = 'Unknown', size = 'M', color = '', personalization = '';
+  if (!variations) return { productType, size, color, personalization };
+
+  const parts = variations.split(',');
+  for (const part of parts) {
+    const p = part.trim();
+    if (p.startsWith('Type:') || p.startsWith('type:')) {
+      let typeVal = p.substring(5).trim();
+      // Skip non-product types
+      if (typeVal === 'Additional Fee') { productType = 'Additional Fee'; continue; }
+      // Extract size from type like "Sweatshirt - S" or "Hoodie - 3XL" or "Quarter Zip M"
+      const dashMatch = typeVal.match(/^(.+?)\s*-\s*(\w+)$/);
+      const spaceMatch = typeVal.match(/^(.+?)\s+((?:6XL|5XL|4XL|3XL|2XL|XL|XS|XXS|XXL|L|M|S|YXL|YL|YM|YS|YXS|6M|12M|2T|3T|4T|6Y|8Y|10Y))$/i);
+      if (dashMatch) {
+        productType = dashMatch[1].trim();
+        size = dashMatch[2].trim().toUpperCase();
+      } else if (spaceMatch) {
+        productType = spaceMatch[1].trim();
+        size = spaceMatch[2].trim().toUpperCase();
+      } else {
+        productType = typeVal;
+      }
+    }
+    if (p.startsWith('Color:') || p.startsWith('color:')) {
+      color = p.substring(6).trim();
+    }
+    if (p.startsWith('Personalization:') || p.startsWith('personalization:')) {
+      personalization = p.substring(16).trim();
     }
   }
-  return 'Unknown';
+  return { productType, size, color, personalization };
 }
 
-function detectSize(text) {
-  text = text.toUpperCase();
-  const sizes = ['6XL','5XL','4XL','3XL','2XL','XL','L','M','S','FREE SIZE'];
-  for (const s of sizes) { if (text.includes(s)) return s; }
-  if (text.includes('CAP') || text.includes('HAT')) return 'Free size';
-  return 'M';
+function detectProductFromName(itemName) {
+  // Fallback: detect product type from item name
+  const text = (itemName || '').toLowerCase();
+  const types = [
+    ['kid baseball shirt', 'Kid Baseball Shirt'], ['kid baseball jacket', 'Kid Baseball Jacket'],
+    ['kid football jersey', 'Kid Football Jersey'], ['kid hoodie', 'Kid Hoodie'],
+    ['kid sweatshirt', 'Kid Sweatshirt'], ['kid t-shirt', 'Kid T-Shirt'],
+    ['youth hawaiian', 'Youth Hawaiian Shirt'], ['baby tee', 'Baby Tee'],
+    ['zip hoodie', 'Zip Hoodie'], ['quarter zip', 'Quarter Zip'],
+    ['baseball jacket', 'Baseball Jacket'], ['baseball shirt', 'Baseball Shirt'],
+    ['hawaiian shirt', 'Hawaiian Shirt'], ['beach short', 'Beach Short'],
+    ['football jersey', 'Football Jersey'], ['linen shirt', 'Linen Shirt'],
+    ['trucker hat', 'Trucker Hat'], ['wash hat', 'Wash Hat'],
+    ['embroidered cap', 'Embroidered Cap'], ['cap', 'Embroidered Cap'],
+    ['hoodie', 'Hoodie'], ['sweatshirt', 'Sweatshirt'], ['crewneck', 'Sweatshirt'],
+    ['t-shirt', 'T-Shirt'], ['tee', 'T-Shirt'], ['shirt', 'T-Shirt'],
+    ['keychain', 'Keychain 7cm'], ['crochet', 'Crochet 12cm'],
+  ];
+  for (const [key, val] of types) {
+    if (text.includes(key)) return val;
+  }
+  return 'Unknown';
 }
 
 function getBasecost(productType, size, supplier) {
   const sd = BASECOST_DB[supplier]; if (!sd) return 0;
   const pd = sd[productType]; if (!pd) return 0;
   if (pd._all !== undefined) return pd._all;
-  const sz = pd[size] || pd['M'] || pd['Free size']; if (!sz) return 0;
+  const sz = pd[size] || pd[size.toUpperCase()] || pd['M'] || pd['Free size'];
+  if (!sz) return 0;
   return sz[0];
 }
 
 function processCSV(rows, shopName, supplier) {
   if (rows.length < 2) return [];
-  const h = rows[0].map(x => x.toLowerCase().trim());
+  const h = rows[0].map(x => x.toLowerCase().replace(/['"]/g, '').trim());
+
+  // Map column indices - support both Order Items and Orders format
   const col = {};
   h.forEach((v, i) => {
-    if (v.includes('sale date') || v === 'date') col.date = i;
-    if (v.includes('item name') || v.includes('product')) col.item = i;
-    if (v.includes('item total')) col.total = i;
-    if (v.includes('price') && !col.total) col.total = i;
-    if (v.includes('quantity') || v === 'sl') col.qty = i;
-    if (v.includes('discount')) col.disc = i;
-    if (v.includes('order id') || v.includes('#order')) col.oid = i;
-    if (v.includes('ship name') || v.includes('fullname')) col.buyer = i;
-    if (v.includes('buyer') && !col.buyer) col.buyer = i;
-    if (v.includes('ship city') || v.includes('city')) col.city = i;
-    if (v.includes('ship state') || v.includes('state')) col.state = i;
-    if (v.includes('ship country') || v.includes('country')) col.country = i;
-    if (v.includes('ship address') || v.includes('address')) col.addr = i;
-    if (v.includes('ship zip') || v.includes('zipcode')) col.zip = i;
-    if (v.includes('tax') || v.includes('vat paid')) col.tax = i;
+    if (v === 'sale date') col.date = i;
+    if (v === 'item name') col.itemName = i;
+    if (v === 'buyer') col.buyer = i;
+    if (v === 'quantity' || v === 'number of items') col.qty = i;
+    if (v === 'price') col.price = i;
+    if (v === 'item total') col.itemTotal = i;
+    if (v === 'order total') col.orderTotal = i;
+    if (v === 'order value') col.orderValue = i;
+    if (v === 'discount amount') col.discount = i;
+    if (v === 'order shipping') col.shipping = i;
+    if (v === 'shipping') col.shipping2 = i;
+    if (v === 'order sales tax' || v === 'sales tax') col.tax = i;
+    if (v === 'vat paid by buyer') col.vat = i;
+    if (v === 'order id') col.orderId = i;
+    if (v === 'transaction id') col.transId = i;
+    if (v === 'variations') col.variations = i;
+    if (v === 'ship name' || v === 'full name') col.shipName = i;
+    if (v === 'ship address1' || v === 'street 1') col.addr1 = i;
+    if (v === 'ship address2' || v === 'street 2') col.addr2 = i;
+    if (v === 'ship city') col.city = i;
+    if (v === 'ship state') col.state = i;
+    if (v === 'ship zipcode') col.zip = i;
+    if (v === 'ship country') col.country = i;
     if (v === 'sku') col.sku = i;
-    if (v.includes('variations') || v === 'type') col.var = i;
-    if (v.includes('color')) col.color = i;
+    if (v === 'date shipped') col.dateShipped = i;
+    if (v === 'date paid') col.datePaid = i;
+    if (v === 'currency') col.currency = i;
+    if (v === 'coupon code') col.coupon = i;
+    if (v === 'status') col.status = i;
   });
 
   const orders = [];
   for (let i = 1; i < rows.length; i++) {
-    const r = rows[i]; if (!r || r.length < 3 || !r[col.date || 0]) continue;
-    const itemText = (r[col.item] || '') + ' ' + (r[col.var] || '') + ' ' + (r[col.sku] || '');
-    const pType = detectProductType(itemText);
-    const size = detectSize(itemText);
+    const r = rows[i];
+    if (!r || r.length < 3) continue;
+
+    const date = r[col.date] || '';
+    if (!date) continue;
+
+    // Parse variations to get product type, size, color
+    const variationsRaw = col.variations !== undefined ? r[col.variations] : '';
+    const itemName = col.itemName !== undefined ? r[col.itemName] : '';
+    const parsed = parseVariations(variationsRaw);
+
+    // If variations didn't give product type, try item name
+    let productType = parsed.productType;
+    if (productType === 'Unknown' || productType === 'Additional Fee') {
+      productType = detectProductFromName(itemName);
+    }
+    // Skip additional fees
+    if (parsed.productType === 'Additional Fee') continue;
+
+    const size = parsed.size;
+    const color = parsed.color;
+
     const qty = parseInt(r[col.qty] || '1') || 1;
-    const price = parseFloat(String(r[col.total] || r[col.item] || '0').replace(/[^0-9.]/g, '')) || 0;
-    const disc = parseFloat(String(r[col.disc] || '0').replace(/[^0-9.]/g, '')) || 0;
-    const tax = parseFloat(String(r[col.tax] || '0').replace(/[^0-9.]/g, '')) || 0;
-    const revenue = price - disc;
-    const fee = revenue * 0.2;
-    const bc = getBasecost(pType, size, supplier) * qty;
+    const price = parseFloat(r[col.price] || r[col.itemTotal] || r[col.orderValue] || '0') || 0;
+    const discount = parseFloat(r[col.discount] || '0') || 0;
+    const shipping = parseFloat(r[col.shipping] || r[col.shipping2] || '0') || 0;
+    const tax = parseFloat(r[col.tax] || r[col.vat] || '0') || 0;
+
+    const revenue = price - discount;
+    const platformFee = revenue * 0.065 + 0.20 + revenue * 0.03; // Etsy: 6.5% transaction + $0.20 listing + 3% processing
+    const basecost = getBasecost(productType, size, supplier) * qty;
+    const profit = revenue - platformFee - tax - basecost;
+
+    const address = [r[col.addr1], r[col.addr2], r[col.city], r[col.state], r[col.zip], r[col.country]].filter(Boolean).join(', ');
+
     orders.push({
-      date: r[col.date] || '', orderId: r[col.oid] || `ORD-${i}`, shop: shopName,
-      productType: pType, size, color: r[col.color] || '', quantity: qty,
-      buyer: r[col.buyer] || '', city: r[col.city] || '', country: r[col.country] || '',
-      address: [r[col.addr],r[col.city],r[col.state],r[col.zip],r[col.country]].filter(Boolean).join(', '),
-      revenue, platformFee: fee, tax, basecost: bc, profit: revenue - fee - tax - bc,
-      supplier, sku: r[col.sku] || '', status: 'Paid',
+      date,
+      orderId: r[col.orderId] || r[col.transId] || `ORD-${i}`,
+      shop: shopName,
+      itemName: (itemName || '').substring(0, 100),
+      productType,
+      size,
+      color,
+      personalization: parsed.personalization,
+      quantity: qty,
+      buyer: r[col.shipName] || '',
+      buyerId: r[col.buyer] || '',
+      address,
+      city: r[col.city] || '',
+      state: r[col.state] || '',
+      zip: r[col.zip] || '',
+      country: r[col.country] || '',
+      revenue,
+      shipping,
+      platformFee,
+      tax,
+      basecost,
+      profit,
+      supplier,
+      sku: r[col.sku] || '',
+      coupon: r[col.coupon] || '',
+      dateShipped: r[col.dateShipped] || '',
+      datePaid: r[col.datePaid] || '',
+      currency: r[col.currency] || 'USD',
+      status: r[col.dateShipped] ? 'Shipped' : r[col.datePaid] ? 'Paid' : 'Pending',
     });
   }
   return orders;
@@ -616,9 +713,26 @@ export default function Home() {
         <div style={{ animation: 'fadeSlideUp 0.4s ease' }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>📦 Đơn hàng ({allOrders.length})</h2>
           {allOrders.length === 0 ? <div style={{ ...S.card, textAlign: 'center', padding: 60 }}><div style={{ fontSize: 48 }}>📭</div><div style={{ color: 'var(--text-muted)', marginTop: 12 }}>Chưa có dữ liệu</div></div> :
-          <div style={S.card}><div style={{ maxHeight: 600, overflowY: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse' }}><thead><tr>{['#','Ngày','Shop','Sản phẩm','Size','Buyer','Revenue','Profit'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{allOrders.slice(0,100).map((o,i) => (
-            <tr key={i}><td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{i+1}</td><td style={{...S.td,fontSize:12}}>{o.date}</td><td style={S.td}><span style={S.badge('var(--accent)')}>{o.shop.substring(0,12)}</span></td><td style={{...S.td,fontWeight:500}}>{o.productType}</td><td style={{...S.td,...S.mono}}>{o.size}</td><td style={{...S.td,fontSize:12}}>{o.buyer}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{formatUSD(o.revenue)}</td><td style={{...S.td,...S.mono,fontWeight:600,color:o.profit>=0?'var(--green)':'var(--red)'}}>{formatUSD(o.profit)}</td></tr>
-          ))}</tbody></table></div></div>}
+          <div style={S.card}><div style={{ maxHeight: 600, overflowY: 'auto', overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1200 }}><thead style={{ position: 'sticky', top: 0, background: 'var(--card)', zIndex: 2 }}><tr>{['#','Ngày','Order ID','Shop','Sản phẩm','Size','Màu','SKU','Buyer','Địa chỉ','Quốc gia','Revenue','Fee','Basecost','Profit','Trạng thái'].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{allOrders.slice(0,200).map((o,i) => (
+            <tr key={i} onMouseEnter={e=>e.currentTarget.style.background='var(--card-hover)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+              <td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{i+1}</td>
+              <td style={{...S.td,fontSize:12,whiteSpace:'nowrap'}}>{o.date}</td>
+              <td style={{...S.td,...S.mono,color:'var(--accent)',fontSize:11}}>{o.orderId}</td>
+              <td style={S.td}><span style={S.badge('var(--accent)')}>{o.shop.substring(0,15)}</span></td>
+              <td style={{...S.td,fontWeight:600,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.productType}</td>
+              <td style={{...S.td,...S.mono,textAlign:'center'}}>{o.size}</td>
+              <td style={{...S.td,fontSize:12}}>{o.color}</td>
+              <td style={{...S.td,...S.mono,fontSize:11,color:'var(--text-dim)'}}>{o.sku}</td>
+              <td style={{...S.td,fontSize:12,maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.buyer}</td>
+              <td style={{...S.td,fontSize:11,color:'var(--text-dim)',maxWidth:150,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.address}</td>
+              <td style={{...S.td,fontSize:11}}>{o.country}</td>
+              <td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{formatUSD(o.revenue)}</td>
+              <td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{formatUSD(o.platformFee)}</td>
+              <td style={{...S.td,...S.mono,color:'var(--orange)'}}>{formatUSD(o.basecost)}</td>
+              <td style={{...S.td,...S.mono,fontWeight:600,color:o.profit>=0?'var(--green)':'var(--red)'}}>{formatUSD(o.profit)}</td>
+              <td style={S.td}><span style={S.badge(o.status==='Shipped'?'var(--green)':o.status==='Paid'?'var(--accent)':'var(--orange)')}>{o.status}</span></td>
+            </tr>
+          ))}</tbody></table>{allOrders.length > 200 && <div style={{textAlign:'center',padding:12,color:'var(--text-dim)',fontSize:13}}>Hiển thị 200/{allOrders.length} đơn</div>}</div></div>}
         </div>
       );
       case 'reports': return <div style={{ animation: 'fadeSlideUp 0.4s ease' }}><h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>📈 Báo cáo</h2><Reports orders={allOrders} /></div>;
