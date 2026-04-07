@@ -228,6 +228,21 @@ export async function POST(request) {
       return NextResponse.json({ success: true, shops: data ? (typeof data === 'string' ? JSON.parse(data) : data) : [] });
     }
 
+    // ====== BOOKMARKLET: Auto-import images from Etsy ======
+    if (action === 'bookmarkletImages') {
+      const { token, images } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      // Merge with existing images
+      const existing = await redis.get('product_images');
+      const existingImages = existing ? (typeof existing === 'string' ? JSON.parse(existing) : existing) : {};
+      const merged = { ...existingImages, ...images };
+      await redis.set('product_images', JSON.stringify(merged));
+      const newCount = Object.keys(images).length;
+      const totalCount = Object.keys(merged).length;
+      return NextResponse.json({ success: true, message: `+${newCount} ảnh (tổng ${totalCount})`, newCount, totalCount });
+    }
+
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Auth error:', error);

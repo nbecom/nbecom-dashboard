@@ -190,11 +190,12 @@ return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,
 
 // ─── Product Listings — Etsy Manager Style (v5.3) ───
 function ProductImages({orders,images,token,onUpdateImages}){
-const[editId,setEditId]=useState(null);const[editUrl,setEditUrl]=useState('');const[sf,setSf]=useState('');const[viewMode,setViewMode]=useState('grid');
+const[editId,setEditId]=useState(null);const[editUrl,setEditUrl]=useState('');const[sf,setSf]=useState('');const[viewMode,setViewMode]=useState('grid');const[showImport,setShowImport]=useState(false);const[importJson,setImportJson]=useState('');
 const filteredOrders=useMemo(()=>sf?orders.filter(o=>o.shop===sf):orders,[orders,sf]);
 const listings=useMemo(()=>{const m={};filteredOrders.forEach(o=>{if(o.listingId&&!m[o.listingId])m[o.listingId]={name:o.itemName?.substring(0,120),pt:o.productType,icon:o.icon,n:0,rev:0,profit:0,sizes:new Set(),colors:new Set(),lid:o.listingId,link:o.etsyLink,shop:o.shop,sku:o.sku,prices:[],last30:0};if(o.listingId){m[o.listingId].n+=o.quantity;m[o.listingId].rev+=o.hasStatement?o.netUSD:o.revenue;m[o.listingId].profit+=o.profit;m[o.listingId].prices.push(parseFloat(o.revenue)||0);if(o.size)m[o.listingId].sizes.add(o.size);if(o.color)m[o.listingId].colors.add(o.color);
 const p=o.date?.split('/');if(p&&p.length>=3){const d=new Date(2000+parseInt(p[2]),parseInt(p[0])-1,parseInt(p[1]));const ago30=new Date();ago30.setDate(ago30.getDate()-30);if(d>=ago30)m[o.listingId].last30+=o.quantity}}});return Object.entries(m).sort((a,b)=>b[1].n-a[1].n)},[filteredOrders]);
 const setImg=async(lid,url)=>{const ni={...images,[lid]:url};onUpdateImages(ni);if(token)await authAPI('saveImages',{token,images:ni})};
+const importFromExtension=async()=>{try{const parsed=JSON.parse(importJson);const count=Object.keys(parsed).length;if(count===0){alert('JSON rỗng!');return}const ni={...images,...parsed};onUpdateImages(ni);if(token)await authAPI('saveImages',{token,images:ni});setShowImport(false);setImportJson('');alert('Đã import '+count+' ảnh thành công!')}catch(e){alert('JSON không hợp lệ: '+e.message)}};
 const totalWithImg=Object.keys(images).filter(k=>images[k]).length;
 const totalListings=listings.length;const activeListings=listings.filter(([,d])=>d.n>0).length;
 return(<div style={{animation:'fadeSlideUp 0.4s'}}>
@@ -208,6 +209,7 @@ return(<div style={{animation:'fadeSlideUp 0.4s'}}>
 <button onClick={()=>setViewMode('grid')} style={{padding:'6px 10px',background:viewMode==='grid'?'var(--accent)':'transparent',color:viewMode==='grid'?'#fff':'var(--text-dim)',border:'none',cursor:'pointer',fontSize:14}}>⊞</button>
 <button onClick={()=>setViewMode('list')} style={{padding:'6px 10px',background:viewMode==='list'?'var(--accent)':'transparent',color:viewMode==='list'?'#fff':'var(--text-dim)',border:'none',cursor:'pointer',fontSize:14}}>☰</button>
 </div>
+<button onClick={()=>setShowImport(true)} style={{...S.btn,fontSize:12,padding:'8px 14px',background:'var(--purple)',color:'#fff'}}>📥 Import từ Extension</button>
 </div></div>
 {/* Stats bar */}
 <div style={{display:'flex',gap:12,marginBottom:20}}>
@@ -258,6 +260,25 @@ return(<div style={{animation:'fadeSlideUp 0.4s'}}>
 <td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{fU(info.rev)}</td>
 <td style={{...S.td,...S.mono,fontWeight:600,color:info.profit>=0?'var(--green)':'var(--red)'}}>{fU(info.profit)}</td>
 </tr>})}</tbody></table></div>}
+{/* Import from Extension Modal */}
+{showImport&&<div onClick={e=>{if(e.target===e.currentTarget)setShowImport(false)}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(6px)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn 0.2s'}}>
+<div style={{...S.card,maxWidth:560,width:'90%',animation:'fadeSlideUp 0.25s'}}>
+<div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}><h3 style={{fontSize:16,fontWeight:700}}>📥 Import ảnh từ Extension</h3><button onClick={()=>setShowImport(false)} style={{...S.btn,padding:'4px 12px'}}>✕</button></div>
+<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:12,lineHeight:1.6}}>
+<b>Hướng dẫn:</b><br/>
+1. Cài Chrome Extension NBECOM<br/>
+2. Mở Etsy → Listings Manager<br/>
+3. Click icon Extension → "Scrape" → "Copy JSON"<br/>
+4. Paste JSON vào ô bên dưới → Import
+</div>
+<textarea placeholder='Paste JSON từ Extension vào đây...\nVí dụ: {"4477958999":"https://i.etsystatic.com/...","4473305129":"https://..."}' value={importJson} onChange={e=>setImportJson(e.target.value)} style={{...S.input,height:140,resize:'vertical',fontFamily:"'Space Mono', monospace",fontSize:11}}/>
+<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12}}>
+<span style={{fontSize:11,color:'var(--text-dim)'}}>{importJson?`${Object.keys(JSON.parse(importJson||'{}')).length||0} ảnh`:''}</span>
+<div style={{display:'flex',gap:8}}>
+<button onClick={()=>setShowImport(false)} style={{...S.btn,background:'var(--border)',color:'var(--text-muted)',padding:'8px 16px'}}>Huỷ</button>
+<button onClick={importFromExtension} disabled={!importJson.trim()} style={{...S.btn,background:'var(--green)',color:'#fff',padding:'8px 20px'}}>✅ Import</button>
+</div></div>
+</div></div>}
 {/* Edit Modal */}
 {editId&&<div onClick={e=>{if(e.target===e.currentTarget){setEditId(null)}}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(6px)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn 0.2s'}}>
 <div style={{...S.card,maxWidth:480,width:'90%',animation:'fadeSlideUp 0.25s'}}>
@@ -295,11 +316,71 @@ return(<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontW
 </div>)}
 </div></div></div>)}
 
-// ─── Extension Guide (MỚI v5) ───
-function ExtGuide(){return(<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:8}}>🧩 Chrome Extension</h2><p style={{color:'var(--text-muted)',fontSize:13,marginBottom:24}}>Extension tự động scrape hình ảnh listing từ Etsy.</p>
-<div style={{...S.card,marginBottom:16}}><h3 style={{fontSize:15,fontWeight:600,marginBottom:12}}>manifest.json</h3><pre style={{background:'var(--bg)',borderRadius:10,padding:16,fontSize:11,...S.mono,color:'var(--accent-light)',lineHeight:1.6,overflowX:'auto'}}>{`{\n  "manifest_version": 3,\n  "name": "nbecom - Etsy Image Sync",\n  "version": "1.0.0",\n  "permissions": ["activeTab", "storage"],\n  "host_permissions": ["https://www.etsy.com/*"],\n  "action": { "default_popup": "popup.html" },\n  "content_scripts": [{\n    "matches": [\n      "https://www.etsy.com/your/shops/*/dashboard*",\n      "https://www.etsy.com/listing/*"\n    ],\n    "js": ["content.js"]\n  }]\n}`}</pre></div>
-<div style={{...S.card,marginBottom:16}}><h3 style={{fontSize:15,fontWeight:600,marginBottom:12}}>content.js</h3><pre style={{background:'var(--bg)',borderRadius:10,padding:16,fontSize:11,...S.mono,color:'#8be9fd',lineHeight:1.6,overflowX:'auto',maxHeight:350}}>{`(function() {\n  function scrapeImages() {\n    const images = {};\n    const match = window.location.pathname.match(/\\/listing\\/(\\d+)/);\n    if (match) {\n      const img = document.querySelector('[data-listing-image] img');\n      if (img?.src) images[match[1]] = img.src.replace(/il_\\d+x\\d+/, 'il_570xN');\n    }\n    document.querySelectorAll('[data-listing-id]').forEach(el => {\n      const lid = el.getAttribute('data-listing-id');\n      const img = el.querySelector('img');\n      if (lid && img?.src) images[lid] = img.src.replace(/il_\\d+x\\d+/, 'il_570xN');\n    });\n    chrome.storage.local.get('nbecom_images', d => {\n      chrome.storage.local.set({ nbecom_images: { ...(d.nbecom_images||{}), ...images } });\n    });\n    return images;\n  }\n  scrapeImages();\n  chrome.runtime.onMessage.addListener((req, sender, res) => {\n    if (req.action === 'scrape') res(scrapeImages());\n    if (req.action === 'getAll') {\n      chrome.storage.local.get('nbecom_images', d => res(d.nbecom_images || {}));\n      return true;\n    }\n  });\n})();`}</pre></div>
-<div style={S.card}><h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>🔧 Cài đặt</h3><div style={{fontSize:13,color:'var(--text-muted)',lineHeight:2.2}}><div>1. Tạo folder <code style={{padding:'2px 8px',borderRadius:4,background:'var(--bg)',color:'var(--accent)'}}>nbecom-extension</code></div><div>2. Mở <code style={{padding:'2px 8px',borderRadius:4,background:'var(--bg)',color:'var(--accent)'}}>chrome://extensions</code></div><div>3. Bật <b>Developer mode</b> → <b>Load unpacked</b></div><div>4. Vào Etsy listing → Extension tự scrape ảnh</div><div>5. Copy URL → Paste vào tab <b>Hình ảnh SP</b></div></div></div></div>)}
+// ─── Bookmarklet Setup (v5.4 — auto sync to NBECOM) ───
+function ExtGuide({token}){
+const apiUrl=typeof window!=='undefined'?window.location.origin+'/api/auth':'';
+const imgBookmarklet=`javascript:void(function(){var o={};document.querySelectorAll('a[href*="/listing/"]').forEach(function(a){var m=a.href.match(/\\/listing\\/(\\d+)/);if(!m)return;var id=m[1];if(o[id])return;var p=a.closest('div,li,article');var img=a.querySelector('img[src*=etsystatic]');if(!img&&p)img=p.querySelector('img[src*=etsystatic]');if(img&&img.src){o[id]=img.src.replace(/il_\\d+x\\d+/,'il_570xN')}});document.querySelectorAll('[data-listing-id]').forEach(function(el){var id=el.getAttribute('data-listing-id');if(!id||o[id])return;var img=el.querySelector('img');if(img&&img.src&&img.src.indexOf('etsystatic')>-1){o[id]=img.src.replace(/il_\\d+x\\d+/,'il_570xN')}});var n=Object.keys(o).length;if(n===0){alert('NBECOM: Khong tim thay anh.\\nMo trang Shop hoac Listings Manager.')}else{fetch('${apiUrl}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'bookmarkletImages',token:'${token}',images:o})}).then(function(r){return r.json()}).then(function(d){if(d.success)alert('NBECOM: Da dong bo '+n+' anh!\\n'+d.message);else alert('NBECOM: Loi - '+d.error)}).catch(function(e){alert('NBECOM: Loi ket noi - '+e.message)})}})()`;
+const[testResult,setTestResult]=useState(null);
+const testSync=async()=>{setTestResult('testing');try{const r=await authAPI('bookmarkletImages',{token,images:{'test123':'https://test.com/test.jpg'}});setTestResult(r.success?'ok':'fail')}catch(e){setTestResult('fail')}};
+return(<div style={{animation:'fadeSlideUp 0.4s'}}>
+<h2 style={{fontSize:20,fontWeight:700,marginBottom:8}}>🔖 Bookmarklet — Tự động lấy ảnh</h2>
+<p style={{color:'var(--text-muted)',fontSize:13,marginBottom:20}}>Kéo bookmark vào Chrome → Mở Etsy → Click → Ảnh tự đồng bộ về NBECOM</p>
+
+<div style={{...S.card,marginBottom:20,background:'rgba(16,185,129,0.04)',borderColor:'var(--green)'}}>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:12,color:'var(--green)'}}>🛡️ An toàn tuyệt đối</h3>
+<div style={{fontSize:12,color:'var(--text-muted)',lineHeight:1.8}}>
+<div>✅ Chỉ ĐỌC ảnh hiển thị trên trang Etsy</div>
+<div>✅ Gửi thẳng về nbecom.app — không qua server nào khác</div>
+<div>✅ Không truy cập mật khẩu, cookie, session Etsy</div>
+<div>✅ Không thay đổi gì trên tài khoản Etsy</div>
+<div>✅ Chỉ chạy khi bạn click — không chạy ngầm</div>
+</div></div>
+
+<div style={{...S.card,marginBottom:20}}>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>📸 Bookmark lấy ảnh sản phẩm</h3>
+<div style={{textAlign:'center',padding:'20px 0',background:'var(--bg)',borderRadius:12,marginBottom:16}}>
+<div style={{fontSize:12,color:'var(--text-dim)',marginBottom:12}}>⬇️ KÉO NÚT NÀY VÀO THANH BOOKMARK ⬇️</div>
+<a href={imgBookmarklet} onClick={e=>e.preventDefault()} draggable="true" style={{display:'inline-block',padding:'14px 28px',borderRadius:10,background:'linear-gradient(135deg,var(--purple),var(--accent))',color:'#fff',fontSize:15,fontWeight:700,textDecoration:'none',cursor:'grab',userSelect:'none'}}>📸 NBECOM Sync Ảnh</a>
+<div style={{fontSize:11,color:'var(--text-dim)',marginTop:8}}>Kéo giữ chuột → thả lên thanh Bookmark Bar</div>
+</div>
+
+<h3 style={{fontSize:14,fontWeight:600,marginBottom:12}}>Cách dùng (chỉ 2 bước):</h3>
+<div style={{fontSize:13,color:'var(--text-muted)',lineHeight:2.2}}>
+<div><span style={{...S.badge('var(--accent)'),marginRight:8}}>1</span> Mở Etsy → <b>Shop page</b> hoặc <b>Listings Manager</b> (trang có hiện sản phẩm)</div>
+<div><span style={{...S.badge('var(--green)'),marginRight:8}}>2</span> Click bookmark <b>"NBECOM Sync Ảnh"</b> → Ảnh tự đồng bộ về NBECOM! ✅</div>
+</div>
+<div style={{fontSize:11,color:'var(--text-dim)',marginTop:12,padding:'8px 12px',background:'var(--bg)',borderRadius:8}}>💡 Mỗi trang Etsy hiện ~24 SP. Nếu shop có nhiều trang → mở từng trang → click bookmark. Ảnh tự tích luỹ, không bị ghi đè.</div>
+</div>
+
+<div style={{...S.card,marginBottom:20}}>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:12}}>🧪 Test kết nối</h3>
+<div style={{display:'flex',gap:12,alignItems:'center'}}>
+<button onClick={testSync} style={{...S.btn,background:'var(--accent)',color:'#fff',padding:'10px 20px'}}>🧪 Test thử</button>
+{testResult==='testing'&&<span style={{color:'var(--text-dim)',fontSize:13}}>⏳ Đang test...</span>}
+{testResult==='ok'&&<span style={{color:'var(--green)',fontSize:13}}>✅ Kết nối OK! Bookmarklet sẽ hoạt động.</span>}
+{testResult==='fail'&&<span style={{color:'var(--red)',fontSize:13}}>❌ Lỗi kết nối. Kiểm tra đăng nhập.</span>}
+</div></div>
+
+<div style={{...S.card,marginBottom:20}}>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:12}}>📋 Setup cho Chrome profile khác</h3>
+<div style={{fontSize:12,color:'var(--text-muted)',lineHeight:1.8,marginBottom:12}}>
+Nếu dùng nhiều Chrome profile, mở link sau trên mỗi profile rồi kéo bookmark:
+</div>
+<div style={{padding:12,background:'var(--bg)',borderRadius:8,fontSize:11,...S.mono,color:'var(--accent)',wordBreak:'break-all',cursor:'pointer'}} onClick={()=>{navigator.clipboard.writeText(imgBookmarklet);alert('Đã copy bookmark code!')}}>
+Click để copy bookmark code → Tạo bookmark mới → Paste vào URL
+</div>
+<div style={{fontSize:11,color:'var(--text-dim)',marginTop:8}}>
+Hoặc: Chrome → Bookmark Manager → Add bookmark → Tên: "NBECOM Sync Ảnh" → URL: paste code trên
+</div></div>
+
+<div style={{...S.card,background:'rgba(245,158,11,0.04)',borderColor:'var(--orange)'}}>
+<h3 style={{fontSize:14,fontWeight:600,marginBottom:8,color:'var(--orange)'}}>⚠️ Lưu ý</h3>
+<div style={{fontSize:12,color:'var(--text-muted)',lineHeight:1.8}}>
+<div>• Token được nhúng trong bookmark — nếu đổi mật khẩu hoặc hết session, cần tạo lại bookmark</div>
+<div>• Bookmark này chỉ dành cho tài khoản <b>{token?.substring(0,8)}...</b></div>
+<div>• Không chia sẻ bookmark cho người khác — nó chứa token đăng nhập của bạn</div>
+</div></div>
+</div>)}
 
 // ═══════════════════════════════════════
 //  MAIN APP (v4 auth system + v5 features)
@@ -332,7 +413,7 @@ if(as==='register')return<RegPage onReg={hReg} onGoLogin={()=>{setAs('login');se
 if(as==='login')return<LoginPage onLogin={hLogin} onGoReg={()=>{setAs('register');setAe('')}} error={ae} loading={al}/>;
 
 const isA=cu?.role==='admin',isM=cu?.role==='manager'||isA,uS=cu?.shops||[];
-const mi=[{id:'dashboard',icon:'📊',label:'Dashboard',show:true},{id:'upload',icon:'📤',label:'Upload CSV',show:isM},{id:'orders',icon:'📦',label:'Đơn hàng',show:true},{id:'reports',icon:'📈',label:'Báo cáo',show:isM},{id:'images',icon:'🖼️',label:'Sản phẩm',show:isM},{id:'shops',icon:'🏪',label:'Quản lý Shop',show:isA},{id:'basecost',icon:'💰',label:'Basecost',show:isA},{id:'extension',icon:'🧩',label:'Extension',show:isA},{id:'users',icon:'👥',label:'Người dùng',show:isA}].filter(m=>m.show);
+const mi=[{id:'dashboard',icon:'📊',label:'Dashboard',show:true},{id:'upload',icon:'📤',label:'Upload CSV',show:isM},{id:'orders',icon:'📦',label:'Đơn hàng',show:true},{id:'reports',icon:'📈',label:'Báo cáo',show:isM},{id:'images',icon:'🖼️',label:'Sản phẩm',show:isM},{id:'shops',icon:'🏪',label:'Quản lý Shop',show:isA},{id:'basecost',icon:'💰',label:'Basecost',show:isA},{id:'extension',icon:'🔖',label:'Bookmarklet',show:isA},{id:'users',icon:'👥',label:'Người dùng',show:isA}].filter(m=>m.show);
 
 const rc=()=>{switch(am){
 case'upload':return<CSVUpload onData={setAo} onStmt={setSd} token={tk} shops={shops}/>;
@@ -341,7 +422,7 @@ case'reports':return<div style={{animation:'fadeSlideUp 0.4s'}}><Reports orders=
 case'images':return<ProductImages orders={ao} images={images} token={tk} onUpdateImages={setImages}/>;
 case'shops':return<ShopManager shops={shops} token={tk} onUpdateShops={setShops}/>;
 case'users':return<UserMgmt token={tk} shops={shops}/>;
-case'extension':return<ExtGuide/>;
+case'extension':return<ExtGuide token={tk}/>;
 case'basecost':return<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:24}}>💰 Basecost</h2>{Object.entries(BDB).map(([sup,products])=><div key={sup} style={{...S.card,marginBottom:16}}><h3 style={{fontSize:15,fontWeight:600,marginBottom:12}}>{sup}</h3><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Sản phẩm','Giá'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{Object.entries(products).map(([p,sizes])=>sizes._all!==undefined?<tr key={p}><td style={{...S.td,fontWeight:500}}>{ICONS[p]||'📦'} {p}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>${sizes._all}</td></tr>:Object.entries(sizes).map(([sz,pr])=><tr key={p+sz}><td style={{...S.td,fontWeight:500}}>{ICONS[p]||'📦'} {p}—{sz}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>${pr[0]}</td></tr>))}</tbody></table></div>)}</div>;
 default:return<div style={{animation:'fadeSlideUp 0.4s'}}>{ao.length===0?<div style={{...S.card,textAlign:'center',padding:60}}><div style={{fontSize:64,marginBottom:16}}>👋</div><div style={{fontSize:20,fontWeight:600,marginBottom:8}}>Xin chào, {cu?.fullName}!</div><div style={{color:'var(--text-muted)',marginBottom:24}}><span style={S.badge(RC[cu?.role]||'var(--text-dim)')}>{ROLES[cu?.role]||cu?.role}</span></div>{isM&&<button onClick={()=>setAm('upload')} style={{...S.btn,background:'var(--accent)',color:'#fff',fontSize:16,padding:'14px 32px'}}>📤 Upload CSV</button>}</div>:<Reports orders={ao} stmtData={sd} images={images}/>}</div>}};
 
