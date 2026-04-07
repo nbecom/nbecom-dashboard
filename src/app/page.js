@@ -47,13 +47,22 @@ function UserMgmt({token,shops}){const SHOPS=shops||DEFAULT_SHOPS;const[users,se
 // ─── CSV Upload (v4 + save to Redis) ───
 function CSVUpload({onData,onStmt,token,shops}){const[shop,setShop]=useState('');const[es,setEs]=useState('Phương Nhi');const[mo,setMo]=useState('');const[drag,setDrag]=useState(false);const[proc,setProc]=useState(false);const[fns,setFns]=useState([]);const[err,setErr]=useState('');const[prev,setPrev]=useState(null);const[saving,setSaving]=useState(false);const fr=useRef(null);
 const SHOPS=shops||DEFAULT_SHOPS;
-const handle=useCallback(files=>{if(!shop){setErr('Chọn Shop trước');return}setErr('');setProc(true);const names=[];const fd={oi:null,st:null};let loaded=0;const total=files.length;for(const f of files){names.push(f.name);const reader=new FileReader();reader.onload=e=>{const txt=e.target.result;const fn=f.name.toLowerCase();if(fn.includes('orderitem')||fn.includes('soldorderitem'))fd.oi=txt;else if(fn.includes('statement')||fn.includes('activity'))fd.st=txt;else if(fn.includes('checkout')||fn.includes('payment'))fd.st=txt;else if(!fd.oi)fd.oi=txt;loaded++;if(loaded===total){try{if(!fd.oi){setErr('Cần file Order Items CSV');setProc(false);return}let orders=processOI(parseCSV(fd.oi),shop,es);if(!orders.length){setErr('Không tìm thấy đơn hàng');setProc(false);return}let stmtData=null;if(fd.st){stmtData=parseStatement(fd.st);orders=mergeAll(orders,stmtData)}const matched=orders.filter(o=>o.hasStatement).length;setPrev({total:orders.length,revenue:orders.reduce((s,o)=>s+(o.hasStatement?o.netUSD:o.revenue),0),profit:orders.reduce((s,o)=>s+o.profit,0),basecost:orders.reduce((s,o)=>s+o.basecost,0),matched,orders,stmtData});setProc(false)}catch(e){setErr('Lỗi: '+e.message);setProc(false)}}};reader.readAsText(f)}setFns(names)},[shop,es]);
+const handle=useCallback(files=>{if(!shop){setErr('Chọn Shop trước');return}setErr('');setProc(true);const names=[];const fd={oi:null,st:null};let loaded=0;const total=files.length;for(const f of files){names.push(f.name);const reader=new FileReader();reader.onload=e=>{const txt=e.target.result;const fn=f.name.toLowerCase();if(fn.includes('orderitem')||fn.includes('soldorderitem'))fd.oi=txt;else if(fn.includes('statement')||fn.includes('activity'))fd.st=txt;else if(fn.includes('checkout')||fn.includes('payment'))fd.st=txt;else if(!fd.oi)fd.oi=txt;loaded++;if(loaded===total){try{
+if(!fd.oi&&!fd.st){setErr('Cần ít nhất 1 file CSV');setProc(false);return}
+// Statement-only upload: save statement without orders
+if(!fd.oi&&fd.st){const stmtData=parseStatement(fd.st);setPrev({total:0,revenue:0,profit:0,basecost:0,matched:0,orders:[],stmtData,stmtOnly:true});setProc(false);return}
+let orders=processOI(parseCSV(fd.oi),shop,es);if(!orders.length){setErr('Không tìm thấy đơn hàng');setProc(false);return}let stmtData=null;if(fd.st){stmtData=parseStatement(fd.st);orders=mergeAll(orders,stmtData)}const matched=orders.filter(o=>o.hasStatement).length;setPrev({total:orders.length,revenue:orders.reduce((s,o)=>s+(o.hasStatement?o.netUSD:o.revenue),0),profit:orders.reduce((s,o)=>s+o.profit,0),basecost:orders.reduce((s,o)=>s+o.basecost,0),matched,orders,stmtData});setProc(false)}catch(e){setErr('Lỗi: '+e.message);setProc(false)}}};reader.readAsText(f)}setFns(names)},[shop,es]);
 const uSup=(idx,ns)=>{if(!prev)return;const u=[...prev.orders];const o={...u[idx]};o.supplier=ns;const bc=gBC(o.productType,o.size,ns)*o.quantity;o.basecost=bc;o.profit=o.hasStatement?o.netUSD-bc:o.revenue-o.platformFee-bc;u[idx]=o;setPrev({...prev,orders:u,basecost:u.reduce((s,o)=>s+o.basecost,0),profit:u.reduce((s,o)=>s+o.profit,0)})};
 const confirmSave=async()=>{if(!prev)return;setSaving(true);
-// Save to local state
+if(prev.stmtOnly){
+// Statement-only: just save statement, no orders
+if(prev.stmtData&&token&&mo){await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo})}
+if(prev.stmtData)onStmt(prev.stmtData);
+}else{
+// Normal: save orders + statement
 onData(prev2=>[...prev2,...prev.orders]);if(prev.stmtData)onStmt(prev.stmtData);
-// Save to Redis DB
 if(token&&mo){await authAPI('saveOrders',{token,orders:prev.orders,shop,month:mo});if(prev.stmtData)await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo})}
+}
 setSaving(false);setPrev(null);setFns([])};
 return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:24}}>📤 Upload CSV</h2>
 <div style={{...S.card,marginBottom:16,padding:16,background:'rgba(59,130,246,0.05)',borderColor:'var(--accent)'}}>
@@ -67,14 +76,23 @@ return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,
 <div><label style={{fontSize:12,color:'var(--text-dim)',display:'block',marginBottom:6}}>THÁNG</label><select style={{...S.select,width:'100%'}} value={mo} onChange={e=>setMo(e.target.value)}><option value="">-- Chọn --</option>{['01','02','03','04','05','06','07','08','09','10','11','12'].map(m=><option key={m} value={'2026-'+m}>Tháng {parseInt(m)}/2026</option>)}</select></div></div></div>
 <div style={{...S.card,marginBottom:20}}><div onDragOver={e=>{e.preventDefault();setDrag(true)}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);handle(Array.from(e.dataTransfer.files))}} onClick={()=>fr.current?.click()} style={{border:'2px dashed '+(drag?'var(--accent)':'var(--border)'),borderRadius:12,padding:48,textAlign:'center',cursor:'pointer',background:drag?'rgba(59,130,246,0.05)':'transparent'}}><input ref={fr} type="file" accept=".csv" multiple style={{display:'none'}} onChange={e=>e.target.files?.length&&handle(Array.from(e.target.files))}/>{proc?<div>⏳ Đang xử lý...</div>:fns.length?<div><div style={{fontSize:36}}>📄</div>{fns.map((n,i)=><div key={i} style={{color:'var(--accent)',fontWeight:600,fontSize:13}}>{n}</div>)}</div>:<div><div style={{fontSize:48,marginBottom:8}}>📁</div><div style={{fontWeight:600}}>Kéo thả 1-2 file CSV vào đây</div></div>}</div>{err&&<div style={{marginTop:12,padding:12,borderRadius:8,background:'rgba(239,68,68,0.1)',color:'var(--red)',fontSize:13}}>⚠️ {err}</div>}</div>
 {prev&&<div style={{...S.card,marginBottom:20,borderColor:'var(--accent)'}}>
-<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>Xác nhận ({prev.total} đơn) {prev.matched>0&&<span style={{...S.badge('var(--green)'),marginLeft:8}}>✅ {prev.matched}/{prev.total} chính xác 100%</span>}{prev.matched===0&&<span style={{...S.badge('var(--orange)'),marginLeft:8}}>⚠️ Profit ước tính</span>}</h3>
+{prev.stmtOnly?<div>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>📊 Statement Only — Lưu dữ liệu tài chính</h3>
+<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}}>
+<div style={{padding:14,borderRadius:10,background:'rgba(16,185,129,0.08)'}}><div style={{fontSize:11,color:'var(--text-dim)'}}>Doanh thu</div><div style={{fontSize:22,fontWeight:700,color:'var(--green)',...S.mono}}>{fVD(prev.stmtData.totalSales)}</div></div>
+<div style={{padding:14,borderRadius:10,background:'rgba(239,68,68,0.08)'}}><div style={{fontSize:11,color:'var(--text-dim)'}}>Phí Etsy</div><div style={{fontSize:22,fontWeight:700,color:'var(--red)',...S.mono}}>{fVD(prev.stmtData.totalFees)}</div></div>
+<div style={{padding:14,borderRadius:10,background:'rgba(245,158,11,0.08)'}}><div style={{fontSize:11,color:'var(--text-dim)'}}>Tax+VAT</div><div style={{fontSize:22,fontWeight:700,color:'var(--orange)',...S.mono}}>{fVD(prev.stmtData.totalTax+prev.stmtData.totalVAT)}</div></div>
+</div>
+<div style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>💡 Statement sẽ được merge với orders đã có trong database để tính profit chính xác.</div>
+<div style={{display:'flex',gap:12}}><button onClick={confirmSave} disabled={saving} style={{...S.btn,background:'var(--green)',color:'#fff',flex:1}}>{saving?'⏳ Đang lưu...':'✅ Lưu Statement vào Database'}</button><button onClick={()=>{setPrev(null);setFns([])}} style={{...S.btn,background:'var(--border)',color:'var(--text-muted)'}}>Hủy</button></div>
+</div>:<div><h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>Xác nhận ({prev.total} đơn) {prev.matched>0&&<span style={{...S.badge('var(--green)'),marginLeft:8}}>✅ {prev.matched}/{prev.total} chính xác 100%</span>}{prev.matched===0&&<span style={{...S.badge('var(--orange)'),marginLeft:8}}>⚠️ Profit ước tính</span>}</h3>
 <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}}>
 <div style={{padding:14,borderRadius:10,background:'rgba(16,185,129,0.08)'}}><div style={{fontSize:11,color:'var(--text-dim)'}}>Net</div><div style={{fontSize:22,fontWeight:700,color:'var(--green)',...S.mono}}>{fU(prev.revenue)}</div></div>
 <div style={{padding:14,borderRadius:10,background:'rgba(245,158,11,0.08)'}}><div style={{fontSize:11,color:'var(--text-dim)'}}>Basecost</div><div style={{fontSize:22,fontWeight:700,color:'var(--orange)',...S.mono}}>{fU(prev.basecost)}</div></div>
 <div style={{padding:14,borderRadius:10,background:prev.profit>=0?'rgba(16,185,129,0.08)':'rgba(239,68,68,0.08)'}}><div style={{fontSize:11,color:'var(--text-dim)'}}>PROFIT</div><div style={{fontSize:22,fontWeight:700,color:prev.profit>=0?'var(--green)':'var(--red)',...S.mono}}>{fU(prev.profit)}</div><div style={{fontSize:10,color:'var(--text-dim)'}}>{fVD(prev.profit*RATE)}</div></div>
 </div>
 <div style={{maxHeight:350,overflowY:'auto',overflowX:'auto',marginBottom:16}}><table style={{width:'100%',borderCollapse:'collapse',minWidth:900}}><thead style={{position:'sticky',top:0,background:'var(--card)',zIndex:2}}><tr>{['#','','Ngày','SP','Size','Màu','Buyer','Supplier','Net','BC','Profit','🔗'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{prev.orders.map((o,i)=><tr key={i}><td style={{...S.td,...S.mono,color:'var(--text-dim)',fontSize:11}}>{i+1}</td><td style={{...S.td,fontSize:18,textAlign:'center'}}>{o.icon}</td><td style={{...S.td,fontSize:12}}>{o.date}</td><td style={{...S.td,fontWeight:600}}>{o.productType}</td><td style={{...S.td,...S.mono,textAlign:'center'}}>{o.size}</td><td style={{...S.td,fontSize:12}}>{o.color}</td><td style={{...S.td,fontSize:12,maxWidth:100,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.buyer}</td><td style={S.td}>{o.autoSup?<span style={S.badge('var(--green)')}>{o.supplier}</span>:<select style={{...S.select,fontSize:11,padding:'3px 6px'}} value={o.supplier} onChange={e=>uSup(i,e.target.value)}><option value="Phương Nhi">P.Nhi</option><option value="Pet">Pet</option></select>}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{o.hasStatement?<span title={'Net VND: '+fVD(o.netVND)}>{fU(o.netUSD)} ✓</span>:fU(o.revenue)}</td><td style={{...S.td,...S.mono,color:'var(--orange)'}}>{fU(o.basecost)}</td><td style={{...S.td,...S.mono,fontWeight:600,color:o.profit>=0?'var(--green)':'var(--red)'}}>{fU(o.profit)}</td><td style={S.td}>{o.etsyLink?<a href={o.etsyLink} target="_blank" rel="noopener noreferrer" style={{color:'var(--accent)',textDecoration:'none'}}>🔗</a>:''}</td></tr>)}</tbody></table></div>
-<div style={{display:'flex',gap:12}}><button onClick={confirmSave} disabled={saving} style={{...S.btn,background:'var(--green)',color:'#fff',flex:1}}>{saving?'⏳ Đang lưu...':'✅ Xác nhận & Lưu vào Database ('+prev.total+' đơn)'}</button><button onClick={()=>{setPrev(null);setFns([])}} style={{...S.btn,background:'var(--border)',color:'var(--text-muted)'}}>Hủy</button></div></div>}</div>)}
+<div style={{display:'flex',gap:12}}><button onClick={confirmSave} disabled={saving} style={{...S.btn,background:'var(--green)',color:'#fff',flex:1}}>{saving?'⏳ Đang lưu...':'✅ Xác nhận & Lưu vào Database ('+prev.total+' đơn)'}</button><button onClick={()=>{setPrev(null);setFns([])}} style={{...S.btn,background:'var(--border)',color:'var(--text-muted)'}}>Hủy</button></div></div>}</div>}</div>)}
 
 // ─── Orders View (v4 + month filter + images) ───
 function OrdersView({orders,userShops,isAdmin,images}){const[df,setDf]=useState('all');const[sf,setSf]=useState('');const[mf,setMf]=useState('');const[q,setQ]=useState('');const[sel,setSel]=useState(null);const[page,setPage]=useState(1);const PER_PAGE=50;
@@ -170,43 +188,76 @@ return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,
 <div style={{...S.card,marginBottom:20}}><h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>Theo Sản phẩm</h3><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['','SP','SL','Net','Profit','Margin'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{Object.entries(byProd).sort((a,b)=>b[1].rev-a[1].rev).map(([pt,d])=><tr key={pt}><td style={{...S.td,textAlign:'center'}}>{images[d.lid]?<img src={images[d.lid]} style={{width:24,height:24,borderRadius:5,objectFit:'cover'}} alt=""/>:<span>{d.icon}</span>}</td><td style={{...S.td,fontWeight:600}}>{pt}</td><td style={{...S.td,...S.mono}}>{d.n}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{fU(d.rev)}</td><td style={{...S.td,...S.mono,fontWeight:700,color:d.prof>=0?'var(--green)':'var(--red)'}}>{fU(d.prof)}</td><td style={{...S.td,...S.mono}}>{d.rev>0?(d.prof/d.rev*100).toFixed(1)+'%':'-'}</td></tr>)}</tbody></table></div>
 <div style={S.card}><h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>Theo Shop</h3><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Shop','Đơn','Net','Basecost','Profit','Margin'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{Object.entries(byShop).sort((a,b)=>b[1].net-a[1].net).map(([sh,d])=><tr key={sh}><td style={{...S.td,fontWeight:600}}>{sh}</td><td style={{...S.td,...S.mono}}>{d.n}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{fU(d.net)}</td><td style={{...S.td,...S.mono,color:'var(--orange)'}}>{fU(d.bc)}</td><td style={{...S.td,...S.mono,fontWeight:700,color:d.prof>=0?'var(--green)':'var(--red)'}}>{fU(d.prof)}</td><td style={{...S.td,...S.mono}}>{d.net>0?(d.prof/d.net*100).toFixed(1)+'%':'-'}</td></tr>)}</tbody></table></div></div>)}
 
-// ─── Product Images — Grid Etsy-style (v5.2 + shop filter) ───
+// ─── Product Listings — Etsy Manager Style (v5.3) ───
 function ProductImages({orders,images,token,onUpdateImages}){
-const[editId,setEditId]=useState(null);const[editUrl,setEditUrl]=useState('');const[sf,setSf]=useState('');
+const[editId,setEditId]=useState(null);const[editUrl,setEditUrl]=useState('');const[sf,setSf]=useState('');const[viewMode,setViewMode]=useState('grid');
 const filteredOrders=useMemo(()=>sf?orders.filter(o=>o.shop===sf):orders,[orders,sf]);
-const listings=useMemo(()=>{const m={};filteredOrders.forEach(o=>{if(o.listingId&&!m[o.listingId])m[o.listingId]={name:o.itemName?.substring(0,80),pt:o.productType,icon:o.icon,n:0,rev:0,sizes:new Set(),colors:new Set(),lid:o.listingId,link:o.etsyLink,shop:o.shop};if(o.listingId){m[o.listingId].n+=o.quantity;m[o.listingId].rev+=o.hasStatement?o.netUSD:o.revenue;if(o.size)m[o.listingId].sizes.add(o.size);if(o.color)m[o.listingId].colors.add(o.color)}});return Object.entries(m).sort((a,b)=>b[1].n-a[1].n)},[filteredOrders]);
+const listings=useMemo(()=>{const m={};filteredOrders.forEach(o=>{if(o.listingId&&!m[o.listingId])m[o.listingId]={name:o.itemName?.substring(0,120),pt:o.productType,icon:o.icon,n:0,rev:0,profit:0,sizes:new Set(),colors:new Set(),lid:o.listingId,link:o.etsyLink,shop:o.shop,sku:o.sku,prices:[],last30:0};if(o.listingId){m[o.listingId].n+=o.quantity;m[o.listingId].rev+=o.hasStatement?o.netUSD:o.revenue;m[o.listingId].profit+=o.profit;m[o.listingId].prices.push(parseFloat(o.revenue)||0);if(o.size)m[o.listingId].sizes.add(o.size);if(o.color)m[o.listingId].colors.add(o.color);
+const p=o.date?.split('/');if(p&&p.length>=3){const d=new Date(2000+parseInt(p[2]),parseInt(p[0])-1,parseInt(p[1]));const ago30=new Date();ago30.setDate(ago30.getDate()-30);if(d>=ago30)m[o.listingId].last30+=o.quantity}}});return Object.entries(m).sort((a,b)=>b[1].n-a[1].n)},[filteredOrders]);
 const setImg=async(lid,url)=>{const ni={...images,[lid]:url};onUpdateImages(ni);if(token)await authAPI('saveImages',{token,images:ni})};
 const totalWithImg=Object.keys(images).filter(k=>images[k]).length;
-return(<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:8}}>🖼️ Sản phẩm ({listings.length} listing)</h2>
-<p style={{color:'var(--text-muted)',fontSize:13,marginBottom:16}}>{totalWithImg} / {listings.length} đã có ảnh • Click ảnh để thêm/sửa URL</p>
-<div style={{display:'flex',gap:12,marginBottom:20,flexWrap:'wrap',alignItems:'center'}}>
+const totalListings=listings.length;const activeListings=listings.filter(([,d])=>d.n>0).length;
+return(<div style={{animation:'fadeSlideUp 0.4s'}}>
+{/* Header like Etsy */}
+<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+<div><h2 style={{fontSize:20,fontWeight:700,marginBottom:4}}>Listings</h2>
+<div style={{fontSize:12,color:'var(--text-dim)'}}>{totalWithImg} / {totalListings} có ảnh • {activeListings} active</div></div>
+<div style={{display:'flex',gap:8,alignItems:'center'}}>
 <select style={{...S.select,fontSize:12,padding:'6px 10px'}} value={sf} onChange={e=>setSf(e.target.value)}><option value="">🏪 Tất cả shop</option>{[...new Set(orders.map(o=>o.shop))].map(s=><option key={s} value={s}>{s}</option>)}</select>
-<div style={{...S.card,marginBottom:0,padding:'10px 16px',background:'rgba(139,92,246,0.05)',borderColor:'var(--purple)',flex:1}}><div style={{fontSize:12}}>💡 Click sản phẩm → Mở Etsy → Copy image address → Paste</div></div>
+<div style={{display:'flex',border:'1px solid var(--border)',borderRadius:6,overflow:'hidden'}}>
+<button onClick={()=>setViewMode('grid')} style={{padding:'6px 10px',background:viewMode==='grid'?'var(--accent)':'transparent',color:viewMode==='grid'?'#fff':'var(--text-dim)',border:'none',cursor:'pointer',fontSize:14}}>⊞</button>
+<button onClick={()=>setViewMode('list')} style={{padding:'6px 10px',background:viewMode==='list'?'var(--accent)':'transparent',color:viewMode==='list'?'#fff':'var(--text-dim)',border:'none',cursor:'pointer',fontSize:14}}>☰</button>
 </div>
-<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:16}}>
-{listings.map(([lid,info])=><div key={lid} style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:14,overflow:'hidden',transition:'all 0.2s',cursor:'pointer'}} onClick={()=>{setEditId(lid);setEditUrl(images[lid]||'')}}>
-<div style={{width:'100%',aspectRatio:'1',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',position:'relative'}}>
+</div></div>
+{/* Stats bar */}
+<div style={{display:'flex',gap:12,marginBottom:20}}>
+<div style={{padding:'8px 16px',borderRadius:8,background:'rgba(16,185,129,0.08)',display:'flex',alignItems:'center',gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:'var(--green)'}}></span><span style={{fontSize:12,color:'var(--text)'}}>Active</span><span style={{fontSize:12,fontWeight:700,color:'var(--green)',...S.mono}}>{activeListings}</span></div>
+<div style={{padding:'8px 16px',borderRadius:8,background:'rgba(245,158,11,0.08)',display:'flex',alignItems:'center',gap:6}}><span style={{fontSize:12,color:'var(--text)'}}>Tổng bán</span><span style={{fontSize:12,fontWeight:700,color:'var(--orange)',...S.mono}}>{listings.reduce((s,[,d])=>s+d.n,0)}</span></div>
+<div style={{padding:'8px 16px',borderRadius:8,background:'rgba(59,130,246,0.08)',display:'flex',alignItems:'center',gap:6}}><span style={{fontSize:12,color:'var(--text)'}}>Revenue</span><span style={{fontSize:12,fontWeight:700,color:'var(--accent)',...S.mono}}>{fU(listings.reduce((s,[,d])=>s+d.rev,0))}</span></div>
+</div>
+{/* Grid View */}
+{viewMode==='grid'?<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:16}}>
+{listings.map(([lid,info])=>{const minP=Math.min(...info.prices);const maxP=Math.max(...info.prices);return<div key={lid} style={{background:'var(--card)',border:'1px solid var(--border)',borderRadius:12,overflow:'hidden',cursor:'pointer',transition:'border-color 0.2s'}} onClick={()=>{setEditId(lid);setEditUrl(images[lid]||'')}}>
+{/* Image */}
+<div style={{width:'100%',aspectRatio:'4/3',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden',position:'relative'}}>
 {images[lid]?<img src={images[lid]} style={{width:'100%',height:'100%',objectFit:'cover'}} alt="" onError={e=>{e.target.style.display='none';e.target.nextSibling.style.display='flex'}}/>:null}
-<div style={{display:images[lid]?'none':'flex',alignItems:'center',justifyContent:'center',width:'100%',height:'100%',fontSize:48,background:'var(--bg)'}}>{info.icon}</div>
-{!images[lid]&&<div style={{position:'absolute',bottom:8,left:'50%',transform:'translateX(-50%)',fontSize:10,color:'var(--accent)',background:'rgba(59,130,246,0.15)',padding:'3px 10px',borderRadius:12}}>+ Thêm ảnh</div>}
+<div style={{display:images[lid]?'none':'flex',alignItems:'center',justifyContent:'center',width:'100%',height:'100%',fontSize:56,background:'var(--bg)'}}>{info.icon}</div>
 </div>
+{/* Info */}
 <div style={{padding:'12px 14px'}}>
-<div style={{fontSize:14,fontWeight:600,marginBottom:4}}>{info.pt}</div>
-<div style={{fontSize:11,color:'var(--text-dim)',marginBottom:8,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={info.name}>{info.name}</div>
-<div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-<span style={{fontSize:13,fontWeight:700,color:'var(--green)',...S.mono}}>{fU(info.rev)}</span>
-<span style={{fontSize:11,color:'var(--text-muted)',...S.mono}}>{info.n} sold</span>
+<div style={{fontSize:13,fontWeight:600,marginBottom:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}} title={info.name}>{info.name?.substring(0,45)}...</div>
+<div style={{fontSize:11,color:'var(--text-dim)',marginBottom:4,...S.mono}}>{info.sku||'—'}</div>
+<div style={{fontSize:13,fontWeight:600,color:'var(--text)',marginBottom:8}}>{minP===maxP?fU(minP):`${fU(minP)} - ${fU(maxP)}`}</div>
+{/* Last 30 days */}
+<div style={{borderTop:'1px solid var(--border)',paddingTop:8,marginBottom:6}}>
+<div style={{fontSize:10,color:'var(--text-dim)',fontWeight:600,marginBottom:4,textTransform:'uppercase',letterSpacing:0.5}}>Last 30 days</div>
+<div style={{fontSize:12,color:'var(--text-muted)'}}>{info.last30} sales</div>
 </div>
-<div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+{/* All time */}
+<div style={{borderTop:'1px solid var(--border)',paddingTop:8}}>
+<div style={{fontSize:10,color:'var(--text-dim)',fontWeight:600,marginBottom:4,textTransform:'uppercase',letterSpacing:0.5}}>All time</div>
+<div style={{fontSize:12,color:'var(--text-muted)'}}>{info.n} sales • {fU(info.rev)} revenue</div>
+</div>
+{/* Sizes & Colors */}
+{(info.sizes.size>0||info.colors.size>0)&&<div style={{borderTop:'1px solid var(--border)',paddingTop:8,marginTop:6,display:'flex',gap:4,flexWrap:'wrap'}}>
 {[...info.sizes].slice(0,5).map(sz=><span key={sz} style={{fontSize:9,padding:'2px 6px',borderRadius:4,background:'var(--bg)',color:'var(--text-dim)'}}>{sz}</span>)}
-</div>
-{info.colors.size>0&&<div style={{display:'flex',gap:4,flexWrap:'wrap',marginTop:4}}>
 {[...info.colors].slice(0,3).map(cl=><span key={cl} style={{fontSize:9,padding:'2px 6px',borderRadius:4,background:'rgba(139,92,246,0.1)',color:'var(--purple)'}}>{cl}</span>)}
-{info.colors.size>3&&<span style={{fontSize:9,color:'var(--text-dim)'}}>+{info.colors.size-3}</span>}
+{info.colors.size>3?<span style={{fontSize:9,color:'var(--text-dim)'}}>+{info.colors.size-3}</span>:null}
 </div>}
-</div>
-</div>)}
-</div>
+</div></div>})}
+</div>:
+/* List View */
+<div style={S.card}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['','Sản phẩm','SKU','Giá','30 ngày','Tổng bán','Revenue','Profit'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+<tbody>{listings.map(([lid,info])=>{const minP=Math.min(...info.prices);const maxP=Math.max(...info.prices);return<tr key={lid} onClick={()=>{setEditId(lid);setEditUrl(images[lid]||'')}} style={{cursor:'pointer'}}>
+<td style={{...S.td,width:48}}>{images[lid]?<img src={images[lid]} style={{width:40,height:40,borderRadius:6,objectFit:'cover'}} alt=""/>:<span style={{fontSize:24}}>{info.icon}</span>}</td>
+<td style={{...S.td,fontWeight:600,maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={info.name}>{info.name?.substring(0,50)}</td>
+<td style={{...S.td,...S.mono,fontSize:11,color:'var(--text-dim)'}}>{info.sku||'—'}</td>
+<td style={{...S.td,...S.mono,fontSize:12}}>{minP===maxP?fU(minP):`${fU(minP)}-${fU(maxP)}`}</td>
+<td style={{...S.td,...S.mono,fontSize:12}}>{info.last30}</td>
+<td style={{...S.td,...S.mono,fontSize:12,fontWeight:600}}>{info.n}</td>
+<td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>{fU(info.rev)}</td>
+<td style={{...S.td,...S.mono,fontWeight:600,color:info.profit>=0?'var(--green)':'var(--red)'}}>{fU(info.profit)}</td>
+</tr>})}</tbody></table></div>}
 {/* Edit Modal */}
 {editId&&<div onClick={e=>{if(e.target===e.currentTarget){setEditId(null)}}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(6px)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn 0.2s'}}>
 <div style={{...S.card,maxWidth:480,width:'90%',animation:'fadeSlideUp 0.25s'}}>
