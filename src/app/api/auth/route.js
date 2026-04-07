@@ -243,6 +243,129 @@ export async function POST(request) {
       return NextResponse.json({ success: true, message: `+${newCount} ảnh (tổng ${totalCount})`, newCount, totalCount });
     }
 
+    // ====== AUTO SYNC: Fetch images from Etsy public shop page ======
+    if (action === 'syncShopImages') {
+      const { token, shopUrl } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      
+      try {
+        // Parse shop name from URL
+        let shopName = shopUrl;
+        const match = shopUrl.match(/shop\/([^/?]+)/);
+        if (match) shopName = match[1];
+        
+        const allImages = {};
+        let page = 1;
+        let emptyCount = 0;
+        
+        while (page <= 100 && emptyCount < 3) {
+          const url = page === 1 
+            ? `https://www.etsy.com/shop/${shopName}` 
+            : `https://www.etsy.com/shop/${shopName}?page=${page}`;
+          
+          const res = await fetch(url, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml',
+              'Accept-Language': 'en-US,en;q=0.9',
+            }
+          });
+          
+          if (!res.ok) break;
+          const html = await res.text();
+          
+          // Parse listing images from HTML
+          const listingRegex = /\/listing\/(\d+)/g;
+          const imgRegex = /https:\/\/i\.etsystatic\.com\/[^"'\s]+/g;
+          
+          // Find all listing IDs and their images
+          const pageImages = {};
+          
+          // Method 1: Find img tags with etsystatic URLs near listing links
+          const chunks = html.split(/\/listing\/(\d+)/);
+          for (let i = 1; i < chunks.length; i += 2) {
+            const listingId = chunks[i];
+            if (allImages[listingId] || pageImages[listingId]) continue;
+            
+            // Look backwards and forwards for etsystatic image URL
+            const context = (chunks[i-1]?.slice(-2000) || '') + chunks[i] + (chunks[i+1]?.slice(0, 2000) || '');
+            const imgMatch = context.match(/https:\/\/i\.etsystatic\.com\/\d+\/\d+\/il_[^"'\s)]+\.(jpg|png|webp)/);
+            if (imgMatch) {
+              let imgUrl = imgMatch[0];
+              imgUrl = imgUrl.replace(/il_\d+x\d+/, 'il_570xN');
+              pageImages[listingId] = imgUrl;
+            }
+          }
+          
+          // Method 2: Find data-listing-id patterns
+          const dataListingRegex = /data-listing-id="(\d+)"[^>]*>[\s\S]*?src="(https:\/\/i\.etsystatic\.com\/[^"]+)"/g;
+          let dlMatch;
+          while ((dlMatch = dataListingRegex.exec(html)) !== null) {
+            if (!allImages[dlMatch[1]] && !pageImages[dlMatch[1]]) {
+              pageImages[dlMatch[1]] = dlMatch[2].replace(/il_\d+x\d+/, 'il_570xN');
+            }
+          }
+          
+          // Method 3: JSON-LD structured data (Etsy embeds this for SEO)
+          const jsonLdRegex = /<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g;
+          let jsonMatch;
+          while ((jsonMatch = jsonLdRegex.exec(html)) !== null) {
+            try {
+              const data = JSON.parse(jsonMatch[1]);
+              if (data['@type'] === 'ItemList' && data.itemListElement) {
+                data.itemListElement.forEach(item => {
+                  const itemUrl = item.url || '';
+                  const idMatch = itemUrl.match(/\/listing\/(\d+)/);
+                  if (idMatch && item.image && !allImages[idMatch[1]] && !pageImages[idMatch[1]]) {
+                    let img = Array.isArray(item.image) ? item.image[0] : item.image;
+                    if (typeof img === 'object') img = img.url || img.contentUrl;
+                    if (img) pageImages[idMatch[1]] = img.replace(/il_\d+x\d+/, 'il_570xN');
+                  }
+                });
+              }
+              if (data['@type'] === 'Product' && data.image) {
+                const idMatch = (data.url || '').match(/\/listing\/(\d+)/);
+                if (idMatch) {
+                  let img = Array.isArray(data.image) ? data.image[0] : data.image;
+                  if (typeof img === 'object') img = img.url;
+                  if (img && !allImages[idMatch[1]]) pageImages[idMatch[1]] = img.replace(/il_\d+x\d+/, 'il_570xN');
+                }
+              }
+            } catch(e) {}
+          }
+          
+          const newOnPage = Object.keys(pageImages).length;
+          if (newOnPage === 0) {
+            emptyCount++;
+          } else {
+            emptyCount = 0;
+            Object.assign(allImages, pageImages);
+          }
+          
+          page++;
+          // Small delay to be respectful
+          await new Promise(r => setTimeout(r, 300));
+        }
+        
+        // Merge with existing
+        const existing = await redis.get('product_images');
+        const existingImages = existing ? (typeof existing === 'string' ? JSON.parse(existing) : existing) : {};
+        const merged = { ...existingImages, ...allImages };
+        await redis.set('product_images', JSON.stringify(merged));
+        
+        return NextResponse.json({ 
+          success: true, 
+          newCount: Object.keys(allImages).length, 
+          totalCount: Object.keys(merged).length,
+          pages: page - 1,
+          message: `Đã lấy ${Object.keys(allImages).length} ảnh từ ${page-1} trang`
+        });
+      } catch(e) {
+        return NextResponse.json({ success: false, error: e.message });
+      }
+    }
+
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Auth error:', error);
