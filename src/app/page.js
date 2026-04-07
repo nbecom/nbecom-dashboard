@@ -316,15 +316,37 @@ return(<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontW
 </div>)}
 </div></div></div>)}
 
-// ─── Bookmarklet Setup (v5.4 — auto sync to NBECOM) ───
+// ─── Bookmarklet Setup (v5.5 — auto fetch ALL pages) ───
 function ExtGuide({token}){
 const apiUrl=typeof window!=='undefined'?window.location.origin+'/api/auth':'';
-const imgBookmarklet=`javascript:void(function(){var o={};document.querySelectorAll('a[href*="/listing/"]').forEach(function(a){var m=a.href.match(/\\/listing\\/(\\d+)/);if(!m)return;var id=m[1];if(o[id])return;var p=a.closest('div,li,article');var img=a.querySelector('img[src*=etsystatic]');if(!img&&p)img=p.querySelector('img[src*=etsystatic]');if(img&&img.src){o[id]=img.src.replace(/il_\\d+x\\d+/,'il_570xN')}});document.querySelectorAll('[data-listing-id]').forEach(function(el){var id=el.getAttribute('data-listing-id');if(!id||o[id])return;var img=el.querySelector('img');if(img&&img.src&&img.src.indexOf('etsystatic')>-1){o[id]=img.src.replace(/il_\\d+x\\d+/,'il_570xN')}});var n=Object.keys(o).length;if(n===0){alert('NBECOM: Khong tim thay anh.\\nMo trang Shop hoac Listings Manager.')}else{fetch('${apiUrl}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'bookmarkletImages',token:'${token}',images:o})}).then(function(r){return r.json()}).then(function(d){if(d.success)alert('NBECOM: Da dong bo '+n+' anh!\\n'+d.message);else alert('NBECOM: Loi - '+d.error)}).catch(function(e){alert('NBECOM: Loi ket noi - '+e.message)})}})()`;
+const imgBookmarklet=`javascript:void(function(){
+var D=document,W=window,A='${apiUrl}',T='${token}';
+function P(h){var o={},d=(new DOMParser).parseFromString(h,'text/html');d.querySelectorAll('a[href*="/listing/"]').forEach(function(a){var m=a.href.match(/\\/listing\\/(\\d+)/);if(!m)return;var id=m[1];if(o[id])return;var p=a.closest('div,li,article');var img=a.querySelector('img[src*=etsystatic]');if(!img&&p)img=p.querySelector('img[src*=etsystatic]');if(img&&img.src)o[id]=img.src.replace(/il_\\d+x\\d+/,'il_570xN')});d.querySelectorAll('[data-listing-id]').forEach(function(el){var id=el.getAttribute('data-listing-id');if(!id||o[id])return;var img=el.querySelector('img');if(img&&img.src&&img.src.indexOf('etsystatic')>-1)o[id]=img.src.replace(/il_\\d+x\\d+/,'il_570xN')});return o}
+var box=D.createElement('div');box.id='nbecom-status';box.style.cssText='position:fixed;top:20px;right:20px;z-index:99999;background:#1e1b4b;color:#e0e7ff;padding:16px 24px;border-radius:12px;font-family:system-ui;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);min-width:280px';box.innerHTML='<div style=\"font-weight:700;font-size:16px;margin-bottom:8px\">📸 NBECOM Sync</div><div id=\"nbecom-msg\">Đang quét trang 1...</div><div style=\"margin-top:8px;height:4px;background:#312e81;border-radius:2px\"><div id=\"nbecom-bar\" style=\"height:100%;width:0;background:linear-gradient(90deg,#818cf8,#a78bfa);border-radius:2px;transition:width 0.3s\"></div></div>';D.body.appendChild(box);
+var msg=D.getElementById('nbecom-msg'),bar=D.getElementById('nbecom-bar');
+var all=P(D.documentElement.outerHTML);var total=Object.keys(all).length;
+msg.textContent='Trang 1: '+total+' ảnh. Đang tìm thêm...';
+var shop=W.location.pathname.match(/\\/shop\\/([^\\/?]+)/);
+var isListing=W.location.pathname.indexOf('/tools/listings')>-1;
+var base=shop?'https://www.etsy.com/shop/'+shop[1]:W.location.href.split('?')[0];
+var pg=2,empty=0,maxPg=100;
+function next(){if(pg>maxPg||empty>=3){done();return}
+var sep=base.indexOf('?')>-1?'&':'?';var url=base+sep+'page='+pg;
+bar.style.width=Math.min(90,pg*5)+'%';
+msg.textContent='Đang quét trang '+pg+'... ('+Object.keys(all).length+' ảnh)';
+fetch(url,{credentials:'include'}).then(function(r){if(!r.ok){done();return}return r.text()}).then(function(h){if(!h){done();return}
+var imgs=P(h);var n=Object.keys(imgs).length;if(n===0){empty++}else{empty=0;for(var k in imgs)all[k]=imgs[k]}
+pg++;setTimeout(next,400)}).catch(function(){done()})}
+function done(){var n=Object.keys(all).length;bar.style.width='100%';
+if(n===0){msg.innerHTML='❌ Không tìm thấy ảnh.<br><small>Mở trang Shop hoặc Listings.</small>';setTimeout(function(){box.remove()},4000);return}
+msg.textContent='Đang gửi '+n+' ảnh về NBECOM...';
+fetch(A,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'bookmarkletImages',token:T,images:all})}).then(function(r){return r.json()}).then(function(d){if(d.success){msg.innerHTML='✅ Đã đồng bộ <b>'+n+'</b> ảnh!<br><small>'+d.message+'</small>';box.style.background='#064e3b'}else{msg.innerHTML='❌ Lỗi: '+d.error;box.style.background='#7f1d1d'}setTimeout(function(){box.remove()},5000)}).catch(function(e){msg.innerHTML='❌ Lỗi kết nối';box.style.background='#7f1d1d';setTimeout(function(){box.remove()},5000)})}
+next()})()`.replace(/\n/g,'');
 const[testResult,setTestResult]=useState(null);
 const testSync=async()=>{setTestResult('testing');try{const r=await authAPI('bookmarkletImages',{token,images:{'test123':'https://test.com/test.jpg'}});setTestResult(r.success?'ok':'fail')}catch(e){setTestResult('fail')}};
 return(<div style={{animation:'fadeSlideUp 0.4s'}}>
 <h2 style={{fontSize:20,fontWeight:700,marginBottom:8}}>🔖 Bookmarklet — Tự động lấy ảnh</h2>
-<p style={{color:'var(--text-muted)',fontSize:13,marginBottom:20}}>Kéo bookmark vào Chrome → Mở Etsy → Click → Ảnh tự đồng bộ về NBECOM</p>
+<p style={{color:'var(--text-muted)',fontSize:13,marginBottom:20}}>1 click lấy TẤT CẢ ảnh sản phẩm — tự động chạy qua mọi trang</p>
 
 <div style={{...S.card,marginBottom:20,background:'rgba(16,185,129,0.04)',borderColor:'var(--green)'}}>
 <h3 style={{fontSize:15,fontWeight:600,marginBottom:12,color:'var(--green)'}}>🛡️ An toàn tuyệt đối</h3>
@@ -346,10 +368,10 @@ return(<div style={{animation:'fadeSlideUp 0.4s'}}>
 
 <h3 style={{fontSize:14,fontWeight:600,marginBottom:12}}>Cách dùng (chỉ 2 bước):</h3>
 <div style={{fontSize:13,color:'var(--text-muted)',lineHeight:2.2}}>
-<div><span style={{...S.badge('var(--accent)'),marginRight:8}}>1</span> Mở Etsy → <b>Shop page</b> hoặc <b>Listings Manager</b> (trang có hiện sản phẩm)</div>
-<div><span style={{...S.badge('var(--green)'),marginRight:8}}>2</span> Click bookmark <b>"NBECOM Sync Ảnh"</b> → Ảnh tự đồng bộ về NBECOM! ✅</div>
+<div><span style={{...S.badge('var(--accent)'),marginRight:8}}>1</span> Mở Etsy → <b>Shop page</b> (etsy.com/shop/TênShop) hoặc <b>Listings Manager</b></div>
+<div><span style={{...S.badge('var(--green)'),marginRight:8}}>2</span> Click bookmark → <b>Tự chạy qua TẤT CẢ trang</b> → Hiện progress → Đồng bộ về NBECOM! ✅</div>
 </div>
-<div style={{fontSize:11,color:'var(--text-dim)',marginTop:12,padding:'8px 12px',background:'var(--bg)',borderRadius:8}}>💡 Mỗi trang Etsy hiện ~24 SP. Nếu shop có nhiều trang → mở từng trang → click bookmark. Ảnh tự tích luỹ, không bị ghi đè.</div>
+<div style={{fontSize:11,color:'var(--text-dim)',marginTop:12,padding:'8px 12px',background:'var(--bg)',borderRadius:8}}>🚀 Bookmarklet tự fetch page 1, 2, 3... đến hết. Không cần mở từng trang thủ công. Popup hiện tiến trình realtime.</div>
 </div>
 
 <div style={{...S.card,marginBottom:20}}>
