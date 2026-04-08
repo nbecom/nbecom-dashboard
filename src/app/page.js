@@ -60,7 +60,7 @@ if(prev.stmtData&&token&&mo){await authAPI('saveStatement',{token,stmtData:prev.
 if(prev.stmtData)onStmt(prev.stmtData);
 }else{
 // Normal: save orders + statement
-onData(prev2=>[...prev2,...prev.orders]);if(prev.stmtData)onStmt(prev.stmtData);
+onData(prev2=>{const otherShop=prev2.filter(o=>o.shop!==shop);return[...otherShop,...prev.orders]});if(prev.stmtData)onStmt(prev.stmtData);
 if(token&&mo){await authAPI('saveOrders',{token,orders:prev.orders,shop,month:mo});if(prev.stmtData)await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo,shop})}
 }
 setSaving(false);setPrev(null);setFns([])};
@@ -164,7 +164,7 @@ if(sf)fl=fl.filter(o=>o.shop===sf);return fl},[allOrders,df,sf,mf]);
 if(!allOrders.length)return<div style={{...S.card,textAlign:'center',padding:60}}><div style={{fontSize:48}}>📊</div><div style={{color:'var(--text-muted)',marginTop:12}}>Upload CSV để xem</div></div>;
 const byShop={};orders.forEach(o=>{if(!byShop[o.shop])byShop[o.shop]={n:0,net:0,bc:0,prof:0};byShop[o.shop].n+=o.quantity;byShop[o.shop].net+=o.hasStatement?o.netUSD:o.revenue;byShop[o.shop].bc+=o.basecost;byShop[o.shop].prof+=o.profit});const byProd={};orders.forEach(o=>{if(!byProd[o.productType])byProd[o.productType]={n:0,rev:0,prof:0,icon:o.icon,lid:o.listingId};byProd[o.productType].n+=o.quantity;byProd[o.productType].rev+=o.hasStatement?o.netUSD:o.revenue;byProd[o.productType].prof+=o.profit});const tN=orders.reduce((s,o)=>s+(o.hasStatement?o.netUSD:o.revenue),0);const tP=orders.reduce((s,o)=>s+o.profit,0);const tBC=orders.reduce((s,o)=>s+o.basecost,0);
 const stmtMatched=orders.filter(o=>o.hasStatement);
-const displayStmt=stmtMatched.length>0?{totalSales:stmtMatched.reduce((s,o)=>s+(o.saleVND||0),0),totalFees:stmtMatched.reduce((s,o)=>s+(o.feeVND||0),0),totalTax:stmtMatched.reduce((s,o)=>s+(o.taxVND||0),0),totalVAT:stmtMatched.reduce((s,o)=>s+(o.vatVND||0),0),totalAds:0}:activeStmt;
+const displayStmt=stmtMatched.length>0?{totalSales:stmtMatched.reduce((s,o)=>s+(o.saleVND||0),0),totalFees:stmtMatched.reduce((s,o)=>s+(o.feeVND||0),0),totalTax:stmtMatched.reduce((s,o)=>s+(o.taxVND||0),0),totalVAT:stmtMatched.reduce((s,o)=>s+(o.vatVND||0),0),totalAds:activeStmt?.totalAds||0}:activeStmt;
 return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:16}}>📈 Báo cáo</h2>
 <div style={{display:'flex',gap:8,marginBottom:20,flexWrap:'wrap'}}>
 {[['all','Tất cả'],['today','Hôm nay'],['yesterday','Hôm qua'],['7days','7 ngày'],['30days','30 ngày'],['1year','1 năm']].map(([k,l])=><button key={k} onClick={()=>setDf(k)} style={{...S.btn,fontSize:12,padding:'6px 16px',background:df===k?'var(--accent)':'var(--border)',color:df===k?'#fff':'var(--text-muted)'}}>{l}</button>)}

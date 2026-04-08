@@ -151,14 +151,17 @@ export async function POST(request) {
       const sessionData = typeof session === 'string' ? JSON.parse(session) : session;
       const keys = await redis.smembers('order_keys');
       const allOrders = [];
+      const seen = new Set();
       for (const key of keys) {
         const data = await redis.get(key);
         if (data) {
           const orders = typeof data === 'string' ? JSON.parse(data) : data;
-          allOrders.push(...orders);
+          for (const o of orders) {
+            const uid = o.transactionId || (o.orderId + o.listingId + o.date);
+            if (!seen.has(uid)) { seen.add(uid); allOrders.push(o); }
+          }
         }
       }
-      // Filter by user shops if not admin
       const filtered = sessionData.role === 'admin' ? allOrders : allOrders.filter(o => (sessionData.shops || []).includes(o.shop));
       return NextResponse.json({ success: true, orders: filtered });
     }
