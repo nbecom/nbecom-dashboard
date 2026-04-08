@@ -164,11 +164,12 @@ export async function POST(request) {
     }
 
     if (action === 'saveStatement') {
-      const { token, stmtData, month } = body;
+      const { token, stmtData, month, shop } = body;
       const session = await redis.get(`session:${token}`);
       if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      await redis.set(`stmt:${month}`, JSON.stringify(stmtData));
-      await redis.sadd('stmt_keys', `stmt:${month}`);
+      const key = shop ? `stmt:${shop}:${month}` : `stmt:${month}`;
+      await redis.set(key, JSON.stringify(stmtData));
+      await redis.sadd('stmt_keys', key);
       return NextResponse.json({ success: true });
     }
 
@@ -178,6 +179,7 @@ export async function POST(request) {
       if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       const keys = await redis.smembers('stmt_keys');
       let merged = { orderNet: {}, totalAds: 0, totalFees: 0, totalTax: 0, totalVAT: 0, totalSales: 0 };
+      const perShop = {};
       for (const key of keys) {
         const data = await redis.get(key);
         if (data) {
@@ -187,10 +189,22 @@ export async function POST(request) {
           merged.totalTax += s.totalTax || 0;
           merged.totalVAT += s.totalVAT || 0;
           merged.totalSales += s.totalSales || 0;
-          merged.orderNet = { ...merged.orderNet, ...(s.orderNet || {}) };
+          if (s.orderNet) Object.assign(merged.orderNet, s.orderNet);
+          // Extract shop name from key like "stmt:ShopName:2026-03"
+          const parts = key.split(':');
+          if (parts.length === 3) {
+            const shopName = parts[1];
+            if (!perShop[shopName]) perShop[shopName] = { totalAds: 0, totalFees: 0, totalTax: 0, totalVAT: 0, totalSales: 0, orderNet: {} };
+            perShop[shopName].totalAds += s.totalAds || 0;
+            perShop[shopName].totalFees += s.totalFees || 0;
+            perShop[shopName].totalTax += s.totalTax || 0;
+            perShop[shopName].totalVAT += s.totalVAT || 0;
+            perShop[shopName].totalSales += s.totalSales || 0;
+            if (s.orderNet) Object.assign(perShop[shopName].orderNet, s.orderNet);
+          }
         }
       }
-      return NextResponse.json({ success: true, stmtData: merged });
+      return NextResponse.json({ success: true, stmtData: merged, perShopStmt: perShop });
     }
 
     if (action === 'saveImages') {

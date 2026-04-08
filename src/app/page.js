@@ -56,12 +56,12 @@ const uSup=(idx,ns)=>{if(!prev)return;const u=[...prev.orders];const o={...u[idx
 const confirmSave=async()=>{if(!prev)return;setSaving(true);
 if(prev.stmtOnly){
 // Statement-only: just save statement, no orders
-if(prev.stmtData&&token&&mo){await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo})}
+if(prev.stmtData&&token&&mo){await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo,shop})}
 if(prev.stmtData)onStmt(prev.stmtData);
 }else{
 // Normal: save orders + statement
 onData(prev2=>[...prev2,...prev.orders]);if(prev.stmtData)onStmt(prev.stmtData);
-if(token&&mo){await authAPI('saveOrders',{token,orders:prev.orders,shop,month:mo});if(prev.stmtData)await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo})}
+if(token&&mo){await authAPI('saveOrders',{token,orders:prev.orders,shop,month:mo});if(prev.stmtData)await authAPI('saveStatement',{token,stmtData:prev.stmtData,month:mo,shop})}
 }
 setSaving(false);setPrev(null);setFns([])};
 return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:24}}>📤 Upload CSV</h2>
@@ -153,8 +153,9 @@ return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,
 </div>)}
 
 // ─── Reports (v5.2 + filters) ───
-function Reports({orders:allOrders,stmtData,images,shops}){
+function Reports({orders:allOrders,stmtData,images,shops,perShopStmt}){
 const[df,setDf]=useState('all');const[sf,setSf]=useState('');const[mf,setMf]=useState('');
+const activeStmt=useMemo(()=>{if(sf&&perShopStmt&&perShopStmt[sf])return perShopStmt[sf];return stmtData},[sf,perShopStmt,stmtData]);
 const ams=useMemo(()=>{const s=new Set();allOrders.forEach(o=>{const{m,y}=gMY(o.date);if(m&&y)s.add(`${y}-${String(m).padStart(2,'0')}`)});return Array.from(s).sort().reverse()},[allOrders]);
 const orders=useMemo(()=>{let fl=allOrders;
 if(mf){const[fy,fm]=mf.split('-').map(Number);fl=fl.filter(o=>{const{m,y}=gMY(o.date);return m===fm&&y===fy})}
@@ -168,15 +169,15 @@ return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,
 <select style={{...S.select,fontSize:12,padding:'6px 10px'}} value={mf} onChange={e=>setMf(e.target.value)}><option value="">📅 Tất cả tháng</option>{ams.map(m=>{const[y,mo]=m.split('-');return<option key={m} value={m}>{MN[parseInt(mo)]}/{y}</option>})}</select>
 <select style={{...S.select,fontSize:12,padding:'6px 10px'}} value={sf} onChange={e=>setSf(e.target.value)}><option value="">🏪 Tất cả shop</option>{[...new Set(allOrders.map(o=>o.shop))].map(s=><option key={s} value={s}>{s}</option>)}</select>
 </div>
-{stmtData&&<div style={{...S.card,marginBottom:20,borderColor:'var(--green)'}}>
-<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>💰 Tổng kết tài chính (Etsy Statement — chính xác 100%){sf&&<span style={{fontSize:11,fontWeight:400,color:'var(--text-dim)',marginLeft:8}}>• Dữ liệu tổng tất cả shop</span>}</h3>
+{activeStmt&&<div style={{...S.card,marginBottom:20,borderColor:'var(--green)'}}>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>💰 Tổng kết tài chính (Etsy Statement){sf&&!(perShopStmt&&perShopStmt[sf])&&<span style={{fontSize:11,fontWeight:400,color:'var(--text-dim)',marginLeft:8}}>• Dữ liệu tổng tất cả shop</span>}{sf&&perShopStmt&&perShopStmt[sf]&&<span style={{fontSize:11,fontWeight:400,color:'var(--green)',marginLeft:8}}>• {sf}</span>}</h3>
 <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}}>
-<div style={{padding:14,borderRadius:10,background:'rgba(16,185,129,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>📦 Doanh thu</div><div style={{fontSize:20,fontWeight:700,color:'var(--green)',...S.mono}}>{fVD(stmtData.totalSales)}</div></div>
-<div style={{padding:14,borderRadius:10,background:'rgba(239,68,68,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>🏪 Phí Etsy</div><div style={{fontSize:20,fontWeight:700,color:'var(--red)',...S.mono}}>{fVD(stmtData.totalFees)}</div></div>
-<div style={{padding:14,borderRadius:10,background:'rgba(245,158,11,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>🏛️ Tax+VAT</div><div style={{fontSize:20,fontWeight:700,color:'var(--orange)',...S.mono}}>{fVD(stmtData.totalTax+stmtData.totalVAT)}</div></div>
+<div style={{padding:14,borderRadius:10,background:'rgba(16,185,129,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>📦 Doanh thu</div><div style={{fontSize:20,fontWeight:700,color:'var(--green)',...S.mono}}>{fVD(activeStmt.totalSales)}</div></div>
+<div style={{padding:14,borderRadius:10,background:'rgba(239,68,68,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>🏪 Phí Etsy</div><div style={{fontSize:20,fontWeight:700,color:'var(--red)',...S.mono}}>{fVD(activeStmt.totalFees)}</div></div>
+<div style={{padding:14,borderRadius:10,background:'rgba(245,158,11,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>🏛️ Tax+VAT</div><div style={{fontSize:20,fontWeight:700,color:'var(--orange)',...S.mono}}>{fVD(activeStmt.totalTax+activeStmt.totalVAT)}</div></div>
 </div>
 <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
-<div style={{padding:14,borderRadius:10,background:'rgba(139,92,246,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>📢 Etsy Ads</div><div style={{fontSize:20,fontWeight:700,color:'var(--purple)',...S.mono}}>{fVD(stmtData.totalAds)}</div></div>
+<div style={{padding:14,borderRadius:10,background:'rgba(139,92,246,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>📢 Etsy Ads</div><div style={{fontSize:20,fontWeight:700,color:'var(--purple)',...S.mono}}>{fVD(activeStmt.totalAds)}</div></div>
 <div style={{padding:14,borderRadius:10,background:'rgba(59,130,246,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>🏭 Basecost</div><div style={{fontSize:20,fontWeight:700,color:'var(--accent)',...S.mono}}>{fU(tBC)} ({fVD(tBC*RATE)})</div></div>
 <div style={{padding:14,borderRadius:10,background:tP>=0?'rgba(16,185,129,0.1)':'rgba(239,68,68,0.1)',border:'2px solid '+(tP>=0?'var(--green)':'var(--red)')}}><div style={{fontSize:10,color:'var(--text-dim)'}}>💎 PROFIT THỰC</div><div style={{fontSize:22,fontWeight:700,color:tP>=0?'var(--green)':'var(--red)',...S.mono}}>{fU(tP)}</div><div style={{fontSize:12,fontWeight:600,color:tP>=0?'var(--green)':'var(--red)'}}>{fVD(tP*RATE)}</div></div>
 </div></div>}
@@ -412,13 +413,13 @@ Hoặc: Chrome → Bookmark Manager → Add bookmark → Tên: "NBECOM Sync Ản
 // ═══════════════════════════════════════
 //  MAIN APP (v4 auth system + v5 features)
 // ═══════════════════════════════════════
-export default function Home(){const[as,setAs]=useState('loading');const[cu,setCu]=useState(null);const[tk,setTk]=useState(null);const[ae,setAe]=useState('');const[al,setAl]=useState(false);const[rs,setRs]=useState('');const[am,setAm]=useState('dashboard');const[so,setSo]=useState(true);const[ao,setAo]=useState([]);const[sd,setSd]=useState(null);const[images,setImages]=useState({});const[shops,setShops]=useState(DEFAULT_SHOPS);
+export default function Home(){const[as,setAs]=useState('loading');const[cu,setCu]=useState(null);const[tk,setTk]=useState(null);const[ae,setAe]=useState('');const[al,setAl]=useState(false);const[rs,setRs]=useState('');const[am,setAm]=useState('dashboard');const[so,setSo]=useState(true);const[ao,setAo]=useState([]);const[sd,setSd]=useState(null);const[pss,setPss]=useState({});const[images,setImages]=useState({});const[shops,setShops]=useState(DEFAULT_SHOPS);
 
 // Auth + Load saved data
 useEffect(()=>{(async()=>{const s=typeof window!=='undefined'?localStorage.getItem('nbecom_token'):null;if(s){const r=await authAPI('verify',{token:s});if(r.success){setCu(r.user);setTk(s);setAs('app');
 const[ordRes,stmtRes,imgRes,shopRes]=await Promise.all([authAPI('loadOrders',{token:s}),authAPI('loadStatements',{token:s}),authAPI('loadImages',{token:s}),authAPI('loadShops',{token:s})]);
 if(ordRes.success&&ordRes.orders?.length)setAo(ordRes.orders);
-if(stmtRes.success&&stmtRes.stmtData?.totalSales)setSd(stmtRes.stmtData);
+if(stmtRes.success&&stmtRes.stmtData?.totalSales){setSd(stmtRes.stmtData);if(stmtRes.perShopStmt)setPss(stmtRes.perShopStmt)}
 if(imgRes.success)setImages(imgRes.images||{});
 if(shopRes.success&&shopRes.shops?.length)setShops(shopRes.shops);
 return}localStorage.removeItem('nbecom_token')}const c=await authAPI('checkSetup');setAs(c.adminExists?'login':'setup')})()},[]);
@@ -427,7 +428,7 @@ const hSetup=async(u,p,fn)=>{setAl(true);setAe('');const r=await authAPI('setup'
 const hLogin=async(u,p)=>{setAl(true);setAe('');const r=await authAPI('login',{username:u,password:p});if(r.success){localStorage.setItem('nbecom_token',r.token);setCu(r.user);setTk(r.token);setAs('app');
 const[ordRes,stmtRes,imgRes,shopRes]=await Promise.all([authAPI('loadOrders',{token:r.token}),authAPI('loadStatements',{token:r.token}),authAPI('loadImages',{token:r.token}),authAPI('loadShops',{token:r.token})]);
 if(ordRes.success&&ordRes.orders?.length)setAo(ordRes.orders);
-if(stmtRes.success&&stmtRes.stmtData?.totalSales)setSd(stmtRes.stmtData);
+if(stmtRes.success&&stmtRes.stmtData?.totalSales){setSd(stmtRes.stmtData);if(stmtRes.perShopStmt)setPss(stmtRes.perShopStmt)}
 if(imgRes.success)setImages(imgRes.images||{});
 if(shopRes.success&&shopRes.shops?.length)setShops(shopRes.shops);
 }else setAe(r.error);setAl(false)};
@@ -445,12 +446,12 @@ const mi=[{id:'dashboard',icon:'📊',label:'Dashboard',show:true},{id:'upload',
 const rc=()=>{switch(am){
 case'upload':return<CSVUpload onData={setAo} onStmt={setSd} token={tk} shops={shops}/>;
 case'orders':return<OrdersView orders={ao} userShops={uS} isAdmin={isA} images={images} shops={shops}/>;
-case'reports':return<div style={{animation:'fadeSlideUp 0.4s'}}><Reports orders={ao} stmtData={sd} images={images} shops={shops}/></div>;
+case'reports':return<div style={{animation:'fadeSlideUp 0.4s'}}><Reports orders={ao} stmtData={sd} images={images} shops={shops} perShopStmt={pss}/></div>;
 case'images':return<ProductImages orders={ao} images={images} token={tk} onUpdateImages={setImages} shops={shops}/>;
 case'shops':return<ShopManager shops={shops} token={tk} onUpdateShops={setShops}/>;
 case'users':return<UserMgmt token={tk} shops={shops}/>;
 case'extension':return<ExtGuide token={tk}/>;
 case'basecost':return<div style={{animation:'fadeSlideUp 0.4s'}}><h2 style={{fontSize:20,fontWeight:700,marginBottom:24}}>💰 Basecost</h2>{Object.entries(BDB).map(([sup,products])=><div key={sup} style={{...S.card,marginBottom:16}}><h3 style={{fontSize:15,fontWeight:600,marginBottom:12}}>{sup}</h3><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Sản phẩm','Giá'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead><tbody>{Object.entries(products).map(([p,sizes])=>sizes._all!==undefined?<tr key={p}><td style={{...S.td,fontWeight:500}}>{ICONS[p]||'📦'} {p}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>${sizes._all}</td></tr>:Object.entries(sizes).map(([sz,pr])=><tr key={p+sz}><td style={{...S.td,fontWeight:500}}>{ICONS[p]||'📦'} {p}—{sz}</td><td style={{...S.td,...S.mono,color:'var(--accent-light)'}}>${pr[0]}</td></tr>))}</tbody></table></div>)}</div>;
-default:return<div style={{animation:'fadeSlideUp 0.4s'}}>{ao.length===0?<div style={{...S.card,textAlign:'center',padding:60}}><div style={{fontSize:64,marginBottom:16}}>👋</div><div style={{fontSize:20,fontWeight:600,marginBottom:8}}>Xin chào, {cu?.fullName}!</div><div style={{color:'var(--text-muted)',marginBottom:24}}><span style={S.badge(RC[cu?.role]||'var(--text-dim)')}>{ROLES[cu?.role]||cu?.role}</span></div>{isM&&<button onClick={()=>setAm('upload')} style={{...S.btn,background:'var(--accent)',color:'#fff',fontSize:16,padding:'14px 32px'}}>📤 Upload CSV</button>}</div>:<Reports orders={ao} stmtData={sd} images={images} shops={shops}/>}</div>}};
+default:return<div style={{animation:'fadeSlideUp 0.4s'}}>{ao.length===0?<div style={{...S.card,textAlign:'center',padding:60}}><div style={{fontSize:64,marginBottom:16}}>👋</div><div style={{fontSize:20,fontWeight:600,marginBottom:8}}>Xin chào, {cu?.fullName}!</div><div style={{color:'var(--text-muted)',marginBottom:24}}><span style={S.badge(RC[cu?.role]||'var(--text-dim)')}>{ROLES[cu?.role]||cu?.role}</span></div>{isM&&<button onClick={()=>setAm('upload')} style={{...S.btn,background:'var(--accent)',color:'#fff',fontSize:16,padding:'14px 32px'}}>📤 Upload CSV</button>}</div>:<Reports orders={ao} stmtData={sd} images={images} shops={shops} perShopStmt={pss}/>}</div>}};
 
 return(<div style={{display:'flex',minHeight:'100vh'}}><aside style={{width:so?240:68,background:'var(--card)',borderRight:'1px solid var(--border)',display:'flex',flexDirection:'column',transition:'width 0.3s',flexShrink:0}}><div style={{padding:so?'20px 16px':'20px 14px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',gap:10}}><div style={{width:36,height:36,borderRadius:10,background:'linear-gradient(135deg,var(--accent),var(--purple))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,fontWeight:700,color:'#fff',flexShrink:0}}>N</div>{so&&<div><div style={{fontWeight:700,fontSize:14}}>NBECOM</div><div style={{fontSize:10,color:'var(--text-dim)'}}>v5.0</div></div>}</div><nav style={{padding:'10px 8px',flex:1}}>{mi.map(item=><div key={item.id} onClick={()=>setAm(item.id)} style={{display:'flex',alignItems:'center',gap:10,padding:so?'9px 12px':'9px',borderRadius:8,marginBottom:2,cursor:'pointer',background:am===item.id?'rgba(59,130,246,0.1)':'transparent',borderLeft:am===item.id?'3px solid var(--accent)':'3px solid transparent',justifyContent:so?'flex-start':'center'}}><span style={{fontSize:15}}>{item.icon}</span>{so&&<span style={{fontSize:13,fontWeight:am===item.id?600:400,color:am===item.id?'var(--accent)':'var(--text-muted)'}}>{item.label}</span>}</div>)}</nav>{so&&<div style={{padding:'12px 16px',borderTop:'1px solid var(--border)'}}><div style={{fontSize:13,fontWeight:600,marginBottom:2}}>{cu?.fullName}</div><div style={{fontSize:11,color:'var(--text-dim)',marginBottom:4}}><span style={S.badge(RC[cu?.role]||'#666')}>{ROLES[cu?.role]||cu?.role}</span></div><div style={{fontSize:10,color:'var(--text-dim)',marginBottom:8}}>📦 {ao.length} đơn • 🖼️ {Object.keys(images).filter(k=>images[k]).length} ảnh</div><button onClick={hLogout} style={{...S.btn,fontSize:12,padding:'6px 12px',background:'rgba(239,68,68,0.1)',color:'var(--red)',width:'100%'}}>🚪 Đăng xuất</button></div>}<div onClick={()=>setSo(!so)} style={{padding:12,borderTop:'1px solid var(--border)',cursor:'pointer',textAlign:'center',color:'var(--text-dim)',fontSize:14}}>{so?'◀':'▶'}</div></aside><main style={{flex:1,overflowY:'auto'}}><header style={{padding:'14px 24px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center',background:'rgba(17,24,39,0.8)',backdropFilter:'blur(12px)',position:'sticky',top:0,zIndex:10}}><h1 style={{fontSize:16,fontWeight:700}}>{mi.find(m=>m.id===am)?.icon} {mi.find(m=>m.id===am)?.label}</h1><div style={{display:'flex',alignItems:'center',gap:10}}>{ao.length>0&&<div style={{fontSize:12,color:'var(--text-dim)',...S.mono}}>{ao.length} đơn</div>}<div style={{width:30,height:30,borderRadius:'50%',background:'linear-gradient(135deg,var(--accent),var(--purple))',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:'#fff'}}>{cu?.fullName?.charAt(0)}</div></div></header><div style={{padding:'20px 24px'}}>{rc()}<div style={{textAlign:'center',padding:'20px 0 8px',color:'var(--text-dim)',fontSize:11}}>NBECOM v5.0 • Powered by Lisa AI 💙</div></div></main></div>)}
