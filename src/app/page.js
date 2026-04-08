@@ -168,8 +168,8 @@ return(<div style={{animation:'fadeSlideUp 0.4s ease'}}><h2 style={{fontSize:20,
 <select style={{...S.select,fontSize:12,padding:'6px 10px'}} value={mf} onChange={e=>setMf(e.target.value)}><option value="">📅 Tất cả tháng</option>{ams.map(m=>{const[y,mo]=m.split('-');return<option key={m} value={m}>{MN[parseInt(mo)]}/{y}</option>})}</select>
 <select style={{...S.select,fontSize:12,padding:'6px 10px'}} value={sf} onChange={e=>setSf(e.target.value)}><option value="">🏪 Tất cả shop</option>{[...new Set(allOrders.map(o=>o.shop))].map(s=><option key={s} value={s}>{s}</option>)}</select>
 </div>
-{stmtData&&!sf&&<div style={{...S.card,marginBottom:20,borderColor:'var(--green)'}}>
-<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>💰 Tổng kết tài chính (Etsy Statement — chính xác 100%)</h3>
+{stmtData&&<div style={{...S.card,marginBottom:20,borderColor:'var(--green)'}}>
+<h3 style={{fontSize:15,fontWeight:600,marginBottom:16}}>💰 Tổng kết tài chính (Etsy Statement — chính xác 100%){sf&&<span style={{fontSize:11,fontWeight:400,color:'var(--text-dim)',marginLeft:8}}>• Dữ liệu tổng tất cả shop</span>}</h3>
 <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}}>
 <div style={{padding:14,borderRadius:10,background:'rgba(16,185,129,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>📦 Doanh thu</div><div style={{fontSize:20,fontWeight:700,color:'var(--green)',...S.mono}}>{fVD(stmtData.totalSales)}</div></div>
 <div style={{padding:14,borderRadius:10,background:'rgba(239,68,68,0.06)'}}><div style={{fontSize:10,color:'var(--text-dim)'}}>🏪 Phí Etsy</div><div style={{fontSize:20,fontWeight:700,color:'var(--red)',...S.mono}}>{fVD(stmtData.totalFees)}</div></div>
