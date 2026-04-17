@@ -17,6 +17,88 @@ function generateToken() {
   return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ═══════════════════════════════════════
+//  GMAIL HELPER FUNCTIONS (v5.7)
+// ═══════════════════════════════════════
+
+// Get valid Gmail access token, auto-refresh if expired
+async function getValidGmailToken() {
+  const data = await redis.get('gmail:tokens');
+  if (!data) return null;
+  const tokens = typeof data === 'string' ? JSON.parse(data) : data;
+
+  // If still valid (5 min buffer), return as-is
+  if (tokens.expiry_date && Date.now() < tokens.expiry_date - 300000) {
+    return tokens;
+  }
+
+  // Need to refresh
+  if (!tokens.refresh_token) {
+    console.error('Gmail token expired but no refresh_token available');
+    return null;
+  }
+
+  try {
+    const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        refresh_token: tokens.refresh_token,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        grant_type: 'refresh_token',
+      }).toString(),
+    });
+
+    const refreshed = await refreshRes.json();
+    if (refreshed.error || !refreshed.access_token) {
+      console.error('Gmail token refresh failed:', refreshed);
+      return null;
+    }
+
+    const updated = {
+      ...tokens,
+      access_token: refreshed.access_token,
+      expiry_date: Date.now() + (refreshed.expires_in * 1000),
+    };
+
+    await redis.set('gmail:tokens', JSON.stringify(updated));
+    return updated;
+  } catch (e) {
+    console.error('Gmail refresh error:', e);
+    return null;
+  }
+}
+
+// Fetch email headers (subject, from, date) for a list of message IDs
+async function fetchEmailMeta(accessToken, messageIds) {
+  const emails = [];
+  for (const id of messageIds) {
+    try {
+      const res = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      const data = await res.json();
+      if (data.error) continue;
+      const headers = data.payload?.headers || [];
+      const getH = (name) => headers.find(h => h.name === name)?.value || '';
+      emails.push({
+        id: data.id,
+        threadId: data.threadId,
+        snippet: data.snippet,
+        subject: getH('Subject'),
+        from: getH('From'),
+        date: getH('Date'),
+        internalDate: data.internalDate,
+      });
+    } catch (e) {
+      console.error('Fetch email meta error:', e);
+    }
+  }
+  return emails;
+}
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -197,13 +279,14 @@ export async function POST(request) {
           const parts = key.split(':');
           if (parts.length === 3) {
             const shopName = parts[1];
-            if (!perShop[shopName]) perShop[shopName] = { totalAds: 0, totalFees: 0, totalTax: 0, totalVAT: 0, totalSales: 0, orderNet: {} };
+            if (!perShop[shopName]) perShop[shopName] = { totalAds: 0, totalFees: 0, totalTax: 0, totalVAT: 0, totalSales: 0, orderNet: {}, typeBreakdown: {} };
             perShop[shopName].totalAds += s.totalAds || 0;
             perShop[shopName].totalFees += s.totalFees || 0;
             perShop[shopName].totalTax += s.totalTax || 0;
             perShop[shopName].totalVAT += s.totalVAT || 0;
             perShop[shopName].totalSales += s.totalSales || 0;
             if (s.orderNet) Object.assign(perShop[shopName].orderNet, s.orderNet);
+            if (s.typeBreakdown) { for (const [t, d] of Object.entries(s.typeBreakdown)) { if (!perShop[shopName].typeBreakdown[t]) perShop[shopName].typeBreakdown[t] = { count: 0, amount: 0, fee: 0, net: 0 }; perShop[shopName].typeBreakdown[t].count += d.count; perShop[shopName].typeBreakdown[t].amount += d.amount; perShop[shopName].typeBreakdown[t].fee += d.fee; perShop[shopName].typeBreakdown[t].net += d.net; } }
           }
         }
       }
@@ -379,6 +462,111 @@ export async function POST(request) {
           message: `Đã lấy ${Object.keys(allImages).length} ảnh từ ${page-1} trang`
         });
       } catch(e) {
+        return NextResponse.json({ success: false, error: e.message });
+      }
+    }
+
+    // ====== GMAIL SYNC (v5.7) ======
+    if (action === 'gmailStatus') {
+      const { token } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+      const data = await redis.get('gmail:tokens');
+      if (!data) {
+        return NextResponse.json({ success: true, connected: false });
+      }
+      const tokens = typeof data === 'string' ? JSON.parse(data) : data;
+
+      // Check if token is valid or refreshable
+      const isExpired = tokens.expiry_date && Date.now() >= tokens.expiry_date;
+      const canRefresh = !!tokens.refresh_token;
+
+      return NextResponse.json({
+        success: true,
+        connected: true,
+        data: {
+          email: tokens.email,
+          messagesTotal: tokens.messages_total,
+          threadsTotal: tokens.threads_total,
+          connectedAt: tokens.connected_at,
+          connectedBy: tokens.connected_by,
+          expiryDate: tokens.expiry_date,
+          isExpired,
+          canRefresh,
+          hasRefreshToken: !!tokens.refresh_token,
+        },
+      });
+    }
+
+    if (action === 'gmailDisconnect') {
+      const { token } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      const sessionData = typeof session === 'string' ? JSON.parse(session) : session;
+      if (sessionData.role !== 'admin') return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+
+      // Try to revoke at Google side
+      const data = await redis.get('gmail:tokens');
+      if (data) {
+        const tokens = typeof data === 'string' ? JSON.parse(data) : data;
+        if (tokens.access_token) {
+          try {
+            await fetch(`https://oauth2.googleapis.com/revoke?token=${tokens.access_token}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            });
+          } catch (e) {
+            // Ignore revoke errors
+          }
+        }
+      }
+
+      await redis.del('gmail:tokens');
+      return NextResponse.json({ success: true, message: 'Đã ngắt kết nối Gmail' });
+    }
+
+    if (action === 'gmailTest') {
+      const { token, maxResults = 10, query = '' } = body;
+      const session = await redis.get(`session:${token}`);
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      const sessionData = typeof session === 'string' ? JSON.parse(session) : session;
+      if (sessionData.role !== 'admin') return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+
+      const tokens = await getValidGmailToken();
+      if (!tokens) {
+        return NextResponse.json({ success: false, error: 'Gmail chưa kết nối hoặc token hết hạn. Vui lòng kết nối lại.' });
+      }
+
+      try {
+        // List message IDs
+        const params = new URLSearchParams({
+          maxResults: String(Math.min(maxResults, 50)),
+        });
+        if (query) params.set('q', query);
+
+        const listRes = await fetch(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages?${params.toString()}`,
+          { headers: { Authorization: `Bearer ${tokens.access_token}` } }
+        );
+        const listData = await listRes.json();
+
+        if (listData.error) {
+          return NextResponse.json({ success: false, error: `Gmail API: ${listData.error.message}` });
+        }
+
+        const messageIds = (listData.messages || []).map(m => m.id);
+        if (messageIds.length === 0) {
+          return NextResponse.json({ success: true, emails: [], total: 0, message: 'Không có email nào khớp' });
+        }
+
+        const emails = await fetchEmailMeta(tokens.access_token, messageIds);
+        return NextResponse.json({
+          success: true,
+          emails,
+          total: listData.resultSizeEstimate || emails.length,
+        });
+      } catch (e) {
         return NextResponse.json({ success: false, error: e.message });
       }
     }
