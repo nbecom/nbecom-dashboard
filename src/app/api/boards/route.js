@@ -1,99 +1,89 @@
-// /api/boards/route.js
 import { NextResponse } from 'next/server';
-import {
-  redis,
-  genId,
-  BOARD_ROLES,
-  FEATURES,
-  isAdmin,
-} from '@/lib/nbecom-schema';
-import { requireFeature, jsonError, jsonOk } from '@/lib/auth';
+import { redis, genId } from '@/lib/nbecom-schema';
+import { requireAuth, jsonError } from '@/lib/auth';
 
-// ---------- GET /api/boards ----------
 export async function GET(req) {
-  const auth = await requireFeature(req, FEATURES.BOARDS);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
   const { user } = auth;
 
-  let bids = [];
-  if (await isAdmin(user.id)) {
-    bids = await redis.smembers('boards:all');
-  } else {
-    bids = await redis.smembers(`user:${user.id}:boards`);
+  const boardIds = (await redis.smembers(`user:${user.id}:boards`)) || [];
+
+  if (boardIds.length === 0) {
+    return NextResponse.json({ boards: [] });
   }
-
-  if (!bids?.length) return NextResponse.json({ boards: [] });
-
-  const boards = await Promise.all(
-    bids.map(async (bid) => {
-      const b = await redis.hgetall(`board:${bid}`);
-      if (!b?.name) return null;
-      const role = await redis.hget(`board:${bid}:members`, user.id);
-      const listCount = await redis.llen(`board:${bid}:lists`);
-      return {
-        id: bid,
-        ...b,
-        myRole: (await isAdmin(user.id)) ? BOARD_ROLES.OWNER : role,
-        listCount,
-      };
-    })
-  );
-
-  return NextResponse.json({
-    boards: boards.filter(Boolean).sort((a, b) => Number(b.createdAt) - Number(a.createdAt)),
-  });
-}
-
-// ---------- POST /api/boards ----------
-export async function POST(req) {
-  const auth = await requireFeature(req, FEATURES.BOARDS);
-  if (auth.error) return auth.error;
-  const { user } = auth;
-
-  // Chỉ Admin/Manager được tạo board
-  if (!['admin', 'manager'].includes(user.role)) {
-    return jsonError('Chỉ Admin/Manager được tạo board', 403);
-  }
-
-  const body = await req.json();
-  const name = (body.name || '').trim();
-  if (!name) return jsonError('Thiếu tên board');
-
-  const bid = genId('b_');
-  const data = {
-    name,
-    bg: body.bg || '#3C3489',
-    icon: body.icon || '📋',
-    ownerId: user.id,
-    createdAt: String(Date.now()),
-  };
 
   const pipe = redis.pipeline();
-  pipe.hset(`board:${bid}`, data);
+  boardIds.forEach((bid) => {
+    pipe.hgetall(`board:${bid}`);
+    pipe.hget(`board:${bid}:members`, user.id);
+    pipe.llen(`board:${bid}:lists`);
+  });
+  const results = await pipe.exec();
+
+  const boards = [];
+  for (let i = 0; i < boardIds.length; i++) {
+    const bid = boardIds[i];
+    const board = results[i * 3];
+    const role = results[i * 3 + 1];
+    const listCount = results[i * 3 + 2] || 0;
+    if (!board?.name) continue;
+    boards.push({
+      id: bid,
+      ...board,
+      myRole: role,
+      listCount,
+    });
+  }
+
+  boards.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+
+  return NextResponse.json({ boards });
+}
+
+export async function POST(req) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+  const { user } = auth;
+
+  const body = await req.json();
+  const { name, bg, icon } = body;
+  if (!name?.trim()) return jsonError('Thiếu tên bảng');
+
+  const bid = genId('b_');
+  const now = Date.now();
+
+  const boardData = {
+    id: bid,
+    name: name.trim(),
+    bg: bg || '#378ADD',
+    icon: icon || '📋',
+    createdBy: user.id,
+    createdAt: String(now),
+  };
+
+  const defaultLists = ['Chưa làm', 'Đang làm', 'Fix', 'Done'];
+  const listIds = defaultLists.map(() => genId('l_'));
+
+  const pipe = redis.pipeline();
+  pipe.hset(`board:${bid}`, boardData);
   pipe.sadd('boards:all', bid);
-  pipe.hset(`board:${bid}:members`, { [user.id]: BOARD_ROLES.OWNER });
+  pipe.hset(`board:${bid}:members`, { [user.id]: 'owner' });
   pipe.sadd(`user:${user.id}:boards`, bid);
+
+  defaultLists.forEach((lname, i) => {
+    const lid = listIds[i];
+    pipe.hset(`list:${lid}`, {
+      id: lid,
+      boardId: bid,
+      name: lname,
+      isDone: lname === 'Done' ? '1' : '0',
+      createdAt: String(now),
+    });
+    pipe.rpush(`board:${bid}:lists`, lid);
+  });
+
   await pipe.exec();
 
-  // Tạo 4 list mặc định: Chưa làm | Đang làm | Fix | Done
-  const defaultLists = [
-    { name: 'Chưa làm', isDone: '0' },
-    { name: 'Đang làm', isDone: '0' },
-    { name: 'Fix', isDone: '0' },
-    { name: 'Done', isDone: '1' },
-  ];
-  const listPipe = redis.pipeline();
-  for (let i = 0; i < defaultLists.length; i++) {
-    const lid = genId('l_');
-    listPipe.hset(`list:${lid}`, {
-      boardId: bid,
-      name: defaultLists[i].name,
-      order: String(i),
-      isDone: defaultLists[i].isDone,
-    });
-    listPipe.rpush(`board:${bid}:lists`, lid);
-  }
-  await listPipe.exec();
-
-  return jsonOk({ board: { id: bid, ...data } });
+  return NextResponse.json({ ok: true, board: { id: bid, ...boardData } });
 }
