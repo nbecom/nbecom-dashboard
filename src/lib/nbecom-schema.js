@@ -1,5 +1,6 @@
 // ============================================================
-// NBECOM v6.0 - BOARDS & SCORING SCHEMA (FIXED)
+// NBECOM v6.0 - BOARDS & SCORING SCHEMA (FIXED v2)
+// Fix: features lưu dạng comma-string để tránh Redis parse JSON bị hỏng
 // ============================================================
 
 import { Redis } from '@upstash/redis';
@@ -75,25 +76,27 @@ export function monthKey(date = new Date()) {
   return `${y}-${m}`;
 }
 
-// Helper an toàn để parse JSON, không crash nếu string lỗi
-function safeJsonParse(str, fallback = null) {
-  if (!str) return fallback;
-  if (typeof str !== 'string') return str; // Đã là object rồi
-  try {
-    return JSON.parse(str);
-  } catch {
-    return fallback;
-  }
+// ---------------- Feature Serialization ----------------
+
+export function serializeFeatures(features) {
+  if (!Array.isArray(features) || features.length === 0) return '';
+  return features.filter((f) => typeof f === 'string' && f.length > 0).join(',');
 }
 
-// Upstash Redis đôi khi trả về object đã parse sẵn, đôi khi là string
-// Hàm này xử lý cả 2 trường hợp
-function normalizeFeatures(raw) {
+export function parseFeatures(raw) {
   if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw)) return raw.filter((f) => typeof f === 'string');
   if (typeof raw === 'string') {
-    const parsed = safeJsonParse(raw, []);
-    return Array.isArray(parsed) ? parsed : [];
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        const arr = JSON.parse(trimmed);
+        return Array.isArray(arr) ? arr : [];
+      } catch {
+        return [];
+      }
+    }
+    return trimmed.split(',').map((s) => s.trim()).filter(Boolean);
   }
   return [];
 }
@@ -107,7 +110,7 @@ export async function getUser(uid) {
   return {
     id: uid,
     ...u,
-    features: normalizeFeatures(u.features),
+    features: parseFeatures(u.features),
   };
 }
 
@@ -121,7 +124,7 @@ export async function hasFeature(uid, feature) {
   const u = await getUser(uid);
   if (!u) return false;
   if (u.status !== USER_STATUS.APPROVED) return false;
-  if (u.role === SYSTEM_ROLES.ADMIN) return true; // Admin luôn có mọi feature
+  if (u.role === SYSTEM_ROLES.ADMIN) return true;
   return (u.features || []).includes(feature);
 }
 
@@ -191,6 +194,16 @@ export async function logActivity(cid, uid, action, meta = {}) {
 
 // ---------------- SCORING ----------------
 
+function safeParseJson(val) {
+  if (!val) return null;
+  if (typeof val !== 'string') return val;
+  try {
+    return JSON.parse(val);
+  } catch {
+    return null;
+  }
+}
+
 export async function getScoreLevels() {
   const raw = await redis.hgetall('scorelevels');
   if (!raw || Object.keys(raw).length === 0) {
@@ -201,10 +214,7 @@ export async function getScoreLevels() {
     await pipe.exec();
     return [...DEFAULT_SCORE_LEVELS];
   }
-  const levels = Object.values(raw).map((s) => {
-    if (typeof s === 'string') return safeJsonParse(s, null);
-    return s;
-  }).filter(Boolean);
+  const levels = Object.values(raw).map(safeParseJson).filter(Boolean);
   return levels.sort((a, b) => (a.order || 0) - (b.order || 0));
 }
 
@@ -267,12 +277,7 @@ export async function tryAutoScoreCard(cid) {
 export async function getDesignerMonthlyScore(uid, mk = monthKey()) {
   const total = await redis.get(`score:${uid}:${mk}:total`);
   const raw = await redis.lrange(`score:${uid}:${mk}`, 0, -1);
-  const entries = (raw || [])
-    .map((r) => {
-      if (typeof r === 'string') return safeJsonParse(r, null);
-      return r;
-    })
-    .filter(Boolean);
+  const entries = (raw || []).map(safeParseJson).filter(Boolean);
   return {
     month: mk,
     total: parseFloat(total || 0),
