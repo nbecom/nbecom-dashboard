@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 
 export default function BoardDetailPage() {
@@ -10,22 +10,24 @@ export default function BoardDetailPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [openCardId, setOpenCardId] = useState(null);
-  const [draggingCard, setDraggingCard] = useState(null);
   const [editingBoardName, setEditingBoardName] = useState(false);
   const [boardNameDraft, setBoardNameDraft] = useState('');
   const [showBoardMenu, setShowBoardMenu] = useState(false);
+  const draggingRef = useRef(null);
 
   useEffect(() => { load(); }, [boardId]);
 
   async function load() {
     try {
-      const meRes = await fetch('/api/auth/me');
+      const [meRes, boardRes] = await Promise.all([
+        fetch('/api/auth/me'),
+        fetch(`/api/boards/${boardId}`),
+      ]);
       if (!meRes.ok) { r.push('/login'); return; }
       const meData = await meRes.json();
       setMe(meData.user);
-      const res = await fetch(`/api/boards/${boardId}`);
-      if (!res.ok) { alert('Không có quyền xem board này'); r.push('/boards'); return; }
-      const d = await res.json();
+      if (!boardRes.ok) { alert('Không có quyền xem board này'); r.push('/boards'); return; }
+      const d = await boardRes.json();
       setData(d);
       setBoardNameDraft(d.board.name);
     } finally { setLoading(false); }
@@ -40,81 +42,66 @@ export default function BoardDetailPage() {
     setTimeout(() => el.remove(), 2500);
   }
 
-  // ----- Board actions -----
   async function saveBoardName() {
     if (!boardNameDraft.trim() || boardNameDraft === data.board.name) {
       setEditingBoardName(false);
       setBoardNameDraft(data.board.name);
       return;
     }
+    setData({ ...data, board: { ...data.board, name: boardNameDraft } });
+    setEditingBoardName(false);
     const res = await fetch(`/api/boards/${boardId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: boardNameDraft }),
     });
-    if (res.ok) {
-      setData({ ...data, board: { ...data.board, name: boardNameDraft } });
-      showToast('✓ Đã đổi tên bảng');
-    } else {
-      showToast('Lỗi đổi tên', 'error');
-    }
-    setEditingBoardName(false);
+    if (res.ok) showToast('✓ Đã đổi tên bảng');
+    else { showToast('Lỗi đổi tên', 'error'); load(); }
   }
 
   async function deleteBoard() {
-    if (!confirm(`XÓA BẢNG "${data.board.name}"?\n\nToàn bộ cột và thẻ sẽ bị xóa vĩnh viễn. Không khôi phục được.`)) return;
+    if (!confirm(`XÓA BẢNG "${data.board.name}"?\n\nToàn bộ cột, thẻ, ảnh sẽ bị xóa vĩnh viễn.`)) return;
     const res = await fetch(`/api/boards/${boardId}`, { method: 'DELETE' });
-    if (res.ok) {
-      showToast('✓ Đã xóa bảng');
-      r.push('/boards');
-    } else {
-      showToast('Lỗi xóa bảng', 'error');
-    }
+    if (res.ok) { showToast('✓ Đã xóa bảng'); r.push('/boards'); }
+    else showToast('Lỗi xóa bảng', 'error');
   }
 
-  // ----- List actions -----
   async function renameList(listId, newName) {
     if (!newName.trim()) return;
     const list = data.lists.find((l) => l.id === listId);
     if (list.name === newName) return;
+    const newLists = data.lists.map((l) => l.id === listId ? { ...l, name: newName } : l);
+    setData({ ...data, lists: newLists });
     const res = await fetch(`/api/lists/${listId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newName }),
     });
-    if (res.ok) {
-      const newLists = data.lists.map((l) => l.id === listId ? { ...l, name: newName } : l);
-      setData({ ...data, lists: newLists });
-      showToast('✓ Đã đổi tên cột');
-    } else {
-      showToast('Lỗi đổi tên cột', 'error');
-    }
+    if (!res.ok) { showToast('Lỗi đổi tên cột', 'error'); load(); }
   }
 
   async function toggleDoneColumn(listId) {
     const list = data.lists.find((l) => l.id === listId);
     const newIsDone = list.isDone === '1' ? false : true;
+    const newLists = data.lists.map((l) => l.id === listId ? { ...l, isDone: newIsDone ? '1' : '0' } : l);
+    setData({ ...data, lists: newLists });
     const res = await fetch(`/api/lists/${listId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ isDone: newIsDone }),
     });
-    if (res.ok) {
-      const newLists = data.lists.map((l) => l.id === listId ? { ...l, isDone: newIsDone ? '1' : '0' } : l);
-      setData({ ...data, lists: newLists });
-      showToast(newIsDone ? '✓ Cột này sẽ tự chấm điểm' : '✓ Bỏ tự chấm điểm');
-    }
+    if (res.ok) showToast(newIsDone ? '✓ Cột này sẽ tự chấm điểm' : '✓ Bỏ tự chấm điểm');
   }
 
-  // ----- Drag drop -----
   function onCardDragStart(card, listId, e) {
-    setDraggingCard({ card, fromListId: listId });
+    draggingRef.current = { card, fromListId: listId };
     e.dataTransfer.effectAllowed = 'move';
-    e.currentTarget.style.opacity = '0.4';
+    e.dataTransfer.setData('text/plain', card.id);
+    requestAnimationFrame(() => {
+      e.target.style.opacity = '0.4';
+    });
   }
   function onCardDragEnd(e) {
-    e.currentTarget.style.opacity = '1';
-    setDraggingCard(null);
+    e.target.style.opacity = '1';
+    draggingRef.current = null;
   }
   function onListDragOver(e) {
     e.preventDefault();
@@ -122,8 +109,9 @@ export default function BoardDetailPage() {
   }
   async function onListDrop(toListId, e) {
     e.preventDefault();
-    if (!draggingCard) return;
-    const { card, fromListId } = draggingCard;
+    const dragData = draggingRef.current;
+    if (!dragData) return;
+    const { card, fromListId } = dragData;
     if (fromListId === toListId) return;
 
     const newLists = data.lists.map((l) => ({ ...l, cards: [...l.cards] }));
@@ -133,14 +121,14 @@ export default function BoardDetailPage() {
     if (idx >= 0) fromList.cards.splice(idx, 1);
     toList.cards.push({ ...card, listId: toListId });
     setData({ ...data, lists: newLists });
+    draggingRef.current = null;
 
     const res = await fetch(`/api/cards/${card.id}/move`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toListId, toIndex: toList.cards.length - 1 }),
     });
     const result = await res.json();
-    if (!res.ok) { showToast(result.error, 'error'); load(); return; }
+    if (!res.ok) { showToast(result.error || 'Lỗi di chuyển', 'error'); load(); return; }
     if (result.scoreResult?.scored) {
       showToast(`✓ Đã cộng ${result.scoreResult.points} điểm`, 'success');
     }
@@ -149,8 +137,7 @@ export default function BoardDetailPage() {
   async function addCard(listId, title) {
     if (!title.trim()) return;
     const res = await fetch('/api/cards', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ listId, title }),
     });
     const d = await res.json();
@@ -162,8 +149,7 @@ export default function BoardDetailPage() {
   async function addList(name) {
     if (!name.trim()) return;
     const res = await fetch('/api/lists', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ boardId, name, isDone: name.toLowerCase().includes('done') }),
     });
     const d = await res.json();
@@ -174,8 +160,7 @@ export default function BoardDetailPage() {
   async function deleteList(listId) {
     const list = data.lists.find((l) => l.id === listId);
     if (list.cards.length > 0) {
-      showToast('Cột còn thẻ - hãy di chuyển hoặc xóa thẻ trước', 'error');
-      return;
+      showToast('Cột còn thẻ - hãy di chuyển hoặc xóa thẻ trước', 'error'); return;
     }
     if (!confirm('Xóa cột này?')) return;
     const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
@@ -203,9 +188,7 @@ export default function BoardDetailPage() {
                 style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.3)', color: '#fff', fontSize: 15, fontWeight: 500, padding: '2px 8px', borderRadius: 4, minWidth: 200 }} />
             ) : (
               <span onDoubleClick={() => canManage && setEditingBoardName(true)} title={canManage ? 'Double-click để đổi tên' : ''}
-                style={{ cursor: canManage ? 'text' : 'default', padding: '2px 4px', borderRadius: 4 }}>
-                {board.name}
-              </span>
+                style={{ cursor: canManage ? 'text' : 'default' }}>{board.name}</span>
             )}
             {canManage && (
               <div style={{ position: 'relative' }}>
@@ -283,7 +266,7 @@ function ListColumn({ list, onCardClick, onDrop, onDragOver, onCardDragStart, on
         </div>
         {canManage && (
           <>
-            <button onClick={() => setShowMenu(!showMenu)} title="Tùy chọn"
+            <button onClick={() => setShowMenu(!showMenu)}
               style={{ background: 'transparent', border: 'none', color: '#9a8fd0', cursor: 'pointer', fontSize: 14, padding: 2, marginLeft: 4 }}>⋯</button>
             {showMenu && (
               <div style={{ position: 'absolute', top: 28, right: 2, background: '#2e1a55', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, minWidth: 180, zIndex: 30, boxShadow: '0 4px 12px rgba(0,0,0,0.4)' }}>
@@ -338,18 +321,19 @@ function ListColumn({ list, onCardClick, onDrop, onDragOver, onCardDragStart, on
 }
 
 function CardItem({ card, onClick, onDragStart, onDragEnd }) {
-  const cover = card.cover;
+  const cover = card.coverThumb || card.cover;
   return (
     <div draggable onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={onClick}
       style={{ background: '#fff', borderRadius: 5, padding: 5, marginBottom: 5, cursor: 'grab', color: '#1f1f1f', border: '2px solid transparent' }}>
       {cover && (
-        <div style={{ width: '100%', height: 100, background: `url(${cover}) center/cover`, borderRadius: 3, marginBottom: 5 }} />
+        <img src={cover} alt="" loading="lazy"
+          style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 3, marginBottom: 5, display: 'block' }} />
       )}
       <div style={{ fontSize: 12, lineHeight: 1.4, padding: '1px 3px' }}>{card.title}</div>
       <div style={{ display: 'flex', gap: 8, marginTop: 4, color: '#666', fontSize: 10, alignItems: 'center', padding: '0 3px 2px' }}>
         {card.attachmentCount > 0 && <span>📎 {card.attachmentCount}</span>}
-        {card.scored === '1' && <span style={{ color: '#10b981', fontWeight: 500 }}>✓ Đã chấm điểm</span>}
-        {card.designerId && card.scored !== '1' && <span style={{ color: '#f59e0b' }}>👤 Designer</span>}
+        {card.scored === '1' && <span style={{ color: '#10b981', fontWeight: 500 }}>✓ Đã chấm</span>}
+        {card.designerId && card.scored !== '1' && <span style={{ color: '#f59e0b' }}>👤</span>}
       </div>
     </div>
   );
@@ -386,11 +370,13 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
   const [card, setCard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [scoreLevels, setScoreLevels] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => { load(); loadScoreLevels(); }, [cardId]);
 
   async function load() {
-    setLoading(true);
     try {
       const res = await fetch(`/api/cards/${cardId}`);
       const d = await res.json();
@@ -401,17 +387,13 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
   async function loadScoreLevels() {
     try {
       const res = await fetch('/api/admin/score-levels');
-      if (res.ok) {
-        const d = await res.json();
-        setScoreLevels(d.levels || []);
-      }
+      if (res.ok) { const d = await res.json(); setScoreLevels(d.levels || []); }
     } catch {}
   }
 
   async function updateField(field, value) {
     const res = await fetch(`/api/cards/${cardId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [field]: value }),
     });
     const d = await res.json();
@@ -420,7 +402,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
   }
 
   async function deleteCard() {
-    if (!confirm('Xóa thẻ này?')) return;
+    if (!confirm('Xóa thẻ này? Toàn bộ ảnh cũng sẽ bị xóa.')) return;
     const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' });
     if (res.ok) onClose();
   }
@@ -440,19 +422,72 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
 
   async function handleDrop(e) {
     e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      await uploadImage(file);
+    const files = e.dataTransfer.files;
+    if (!files?.length) return;
+    for (const file of files) {
+      if (file.type.startsWith('image/')) {
+        await uploadImage(file);
+      }
     }
   }
 
   async function uploadImage(blob) {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      await updateField('cover', reader.result);
-      alert('Đã đính kèm ảnh! (Build 3 sẽ upload lên Cloudflare R2)');
-    };
-    reader.readAsDataURL(blob);
+    const MAX = 15 * 1024 * 1024;
+    if (blob.size > MAX) {
+      alert(`Ảnh quá lớn (${(blob.size / 1024 / 1024).toFixed(1)}MB). Tối đa 15MB.`);
+      return;
+    }
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    const fd = new FormData();
+    fd.append('file', blob, blob.name || 'pasted-image.png');
+    fd.append('cardId', cardId);
+
+    try {
+      const xhr = new XMLHttpRequest();
+      const promise = new Promise((resolve, reject) => {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          else reject(new Error(xhr.responseText));
+        };
+        xhr.onerror = () => reject(new Error('Lỗi mạng'));
+        xhr.open('POST', '/api/upload');
+        xhr.send(fd);
+      });
+
+      await promise;
+      await load();
+    } catch (e) {
+      alert('Lỗi upload: ' + e.message);
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  }
+
+  async function deleteAttachment(attId) {
+    if (!confirm('Xóa ảnh này?')) return;
+    const res = await fetch('/api/upload', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attId }),
+    });
+    if (res.ok) await load();
+    else alert('Lỗi xóa ảnh');
+  }
+
+  async function setAsCover(attId) {
+    const res = await fetch('/api/upload/set-cover', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ attId, cardId }),
+    });
+    if (res.ok) await load();
   }
 
   if (loading || !card) return (
@@ -462,15 +497,18 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
   );
 
   const c = card.card;
+  const attachments = card.attachments || [];
 
   return (
+    <>
     <div onClick={onClose} onPaste={handlePaste}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 100, padding: 30, overflow: 'auto' }}>
       <div onClick={(e) => e.stopPropagation()} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}
-        style={{ background: '#f5f5f5', borderRadius: 10, width: '100%', maxWidth: 680, color: '#1f1f1f', overflow: 'hidden' }}>
+        style={{ background: '#f5f5f5', borderRadius: 10, width: '100%', maxWidth: 760, color: '#1f1f1f', overflow: 'hidden' }}>
 
         {c.cover && (
-          <div style={{ height: 160, background: `url(${c.cover}) center/cover`, position: 'relative' }}>
+          <div style={{ height: 200, position: 'relative', background: '#e4e4e7' }}>
+            <img src={c.cover} alt="cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             <button onClick={() => updateField('cover', '')}
               style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>
               × Xóa ảnh bìa
@@ -484,12 +522,46 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
               onBlur={() => updateField('title', c.title)}
               style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 17, fontWeight: 500, color: '#1f1f1f', padding: 0, marginBottom: 12, boxSizing: 'border-box' }} />
 
-            {!c.cover && (
-              <div style={{ border: '2px dashed #d4d4d8', borderRadius: 6, padding: 16, textAlign: 'center', marginBottom: 14, background: '#fff' }}>
-                <div style={{ fontSize: 24, marginBottom: 4 }}>🖼</div>
-                <div style={{ fontSize: 12, color: '#71717a', marginBottom: 4 }}><b>Paste ảnh (Ctrl+V)</b> hoặc kéo-thả ảnh vào đây</div>
-                <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])}
-                  style={{ fontSize: 11, marginTop: 6 }} />
+            <div style={{ border: '2px dashed #6366f1', borderRadius: 8, padding: 14, textAlign: 'center', marginBottom: 14, background: '#eef2ff', position: 'relative' }}>
+              {uploading ? (
+                <div>
+                  <div style={{ fontSize: 13, color: '#6366f1', marginBottom: 8, fontWeight: 500 }}>⏳ Đang upload... {uploadProgress}%</div>
+                  <div style={{ height: 6, background: '#ddd6fe', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${uploadProgress}%`, background: '#6366f1', transition: 'width 0.2s' }} />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 20, marginBottom: 4 }}>📎</div>
+                  <div style={{ fontSize: 13, color: '#4338ca', fontWeight: 500, marginBottom: 2 }}>Paste ảnh (Ctrl+V), kéo-thả, hoặc chọn file</div>
+                  <div style={{ fontSize: 11, color: '#6366f1', marginBottom: 6 }}>Tối đa 15MB · Tự tạo thumbnail</div>
+                  <input type="file" accept="image/*" multiple onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    files.forEach((f) => uploadImage(f));
+                  }}
+                    style={{ fontSize: 11 }} />
+                </>
+              )}
+            </div>
+
+            {attachments.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 500, color: '#52525b', marginBottom: 6 }}>📎 Ảnh đính kèm ({attachments.length})</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 6 }}>
+                  {attachments.map((att) => (
+                    <div key={att.id} style={{ position: 'relative', aspectRatio: '1', background: '#fff', borderRadius: 6, overflow: 'hidden', border: '1px solid #e4e4e7' }}>
+                      <img src={att.thumbUrl} alt={att.name} loading="lazy"
+                        onClick={() => setLightbox(att.url)}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'pointer' }} />
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'linear-gradient(transparent, rgba(0,0,0,0.7))', padding: '16px 4px 4px', display: 'flex', gap: 2 }}>
+                        <button onClick={() => setAsCover(att.id)} title="Đặt làm ảnh bìa"
+                          style={{ flex: 1, background: 'rgba(255,255,255,0.9)', border: 'none', padding: '3px', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>🖼</button>
+                        <button onClick={() => deleteAttachment(att.id)} title="Xóa"
+                          style={{ flex: 1, background: 'rgba(239,68,68,0.9)', color: '#fff', border: 'none', padding: '3px', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>×</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -538,7 +610,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
 
           <div>
             <div style={{ fontSize: 12, fontWeight: 500, color: '#52525b', marginBottom: 8 }}>📋 Thông tin</div>
-            <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>Tạo lúc: {new Date(Number(c.createdAt)).toLocaleString('vi-VN')}</div>
+            <div style={{ fontSize: 11, color: '#71717a', marginBottom: 4 }}>Tạo: {new Date(Number(c.createdAt)).toLocaleString('vi-VN')}</div>
             <div style={{ fontSize: 11, color: '#71717a', marginBottom: 14 }}>ID: {c.id.slice(-8)}</div>
 
             <button onClick={deleteCard}
@@ -546,7 +618,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
 
             <div style={{ fontSize: 12, fontWeight: 500, color: '#52525b', marginBottom: 8 }}>📜 Hoạt động</div>
             <div style={{ fontSize: 11, color: '#71717a', maxHeight: 180, overflowY: 'auto' }}>
-              {card.activity?.slice(0, 5).map((a, i) => (
+              {card.activity?.slice(0, 10).map((a, i) => (
                 <div key={i} style={{ padding: '4px 0', borderBottom: '0.5px solid #e4e4e7' }}>
                   <b>{a.action}</b> · {new Date(a.at).toLocaleString('vi-VN')}
                 </div>
@@ -556,7 +628,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
         </div>
 
         <div style={{ padding: '10px 22px', borderTop: '1px solid #e4e4e7', background: '#fafafa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ fontSize: 11, color: '#71717a' }}>Tip: Paste ảnh bằng <b>Ctrl+V</b> hoặc kéo-thả</div>
+          <div style={{ fontSize: 11, color: '#71717a' }}>Tip: <b>Ctrl+V</b> hoặc kéo-thả ảnh</div>
           <button onClick={onClose}
             style={{ background: '#6366f1', border: 'none', color: '#fff', padding: '8px 18px', borderRadius: 5, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
             Đóng
@@ -564,5 +636,13 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
         </div>
       </div>
     </div>
+
+    {lightbox && (
+      <div onClick={() => setLightbox(null)}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200, cursor: 'zoom-out', padding: 20 }}>
+        <img src={lightbox} alt="" style={{ maxWidth: '95%', maxHeight: '95%', objectFit: 'contain' }} />
+      </div>
+    )}
+    </>
   );
 }
