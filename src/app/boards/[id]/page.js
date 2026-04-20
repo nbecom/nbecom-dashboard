@@ -2,6 +2,33 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 
+async function resizeImageClient(file, maxSize = 2400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = (e) => { img.src = e.target.result; };
+    reader.onerror = reject;
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxSize || height > maxSize) {
+        if (width > height) { height = Math.round(height * maxSize / width); width = maxSize; }
+        else { width = Math.round(width * maxSize / height); height = maxSize; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        if (!blob) return reject(new Error('Không thể nén ảnh'));
+        resolve(blob);
+      }, 'image/webp', quality);
+    };
+    img.onerror = () => reject(new Error('Không đọc được ảnh'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function BoardDetailPage() {
   const r = useRouter();
   const params = useParams();
@@ -95,25 +122,19 @@ export default function BoardDetailPage() {
     draggingRef.current = { card, fromListId: listId };
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', card.id);
-    requestAnimationFrame(() => {
-      e.target.style.opacity = '0.4';
-    });
+    requestAnimationFrame(() => { e.target.style.opacity = '0.4'; });
   }
   function onCardDragEnd(e) {
     e.target.style.opacity = '1';
     draggingRef.current = null;
   }
-  function onListDragOver(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  }
+  function onListDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
   async function onListDrop(toListId, e) {
     e.preventDefault();
     const dragData = draggingRef.current;
     if (!dragData) return;
     const { card, fromListId } = dragData;
     if (fromListId === toListId) return;
-
     const newLists = data.lists.map((l) => ({ ...l, cards: [...l.cards] }));
     const fromList = newLists.find((l) => l.id === fromListId);
     const toList = newLists.find((l) => l.id === toListId);
@@ -122,16 +143,13 @@ export default function BoardDetailPage() {
     toList.cards.push({ ...card, listId: toListId });
     setData({ ...data, lists: newLists });
     draggingRef.current = null;
-
     const res = await fetch(`/api/cards/${card.id}/move`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toListId, toIndex: toList.cards.length - 1 }),
     });
     const result = await res.json();
     if (!res.ok) { showToast(result.error || 'Lỗi di chuyển', 'error'); load(); return; }
-    if (result.scoreResult?.scored) {
-      showToast(`✓ Đã cộng ${result.scoreResult.points} điểm`, 'success');
-    }
+    if (result.scoreResult?.scored) showToast(`✓ Đã cộng ${result.scoreResult.points} điểm`, 'success');
   }
 
   async function addCard(listId, title) {
@@ -159,9 +177,7 @@ export default function BoardDetailPage() {
 
   async function deleteList(listId) {
     const list = data.lists.find((l) => l.id === listId);
-    if (list.cards.length > 0) {
-      showToast('Cột còn thẻ - hãy di chuyển hoặc xóa thẻ trước', 'error'); return;
-    }
+    if (list.cards.length > 0) { showToast('Cột còn thẻ - hãy di chuyển hoặc xóa thẻ trước', 'error'); return; }
     if (!confirm('Xóa cột này?')) return;
     const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
     const d = await res.json();
@@ -240,11 +256,8 @@ function ListColumn({ list, onCardClick, onDrop, onDragOver, onCardDragStart, on
   const isDone = list.isDone === '1';
 
   function saveName() {
-    if (nameDraft.trim() && nameDraft !== list.name) {
-      onRenameList(nameDraft.trim());
-    } else {
-      setNameDraft(list.name);
-    }
+    if (nameDraft.trim() && nameDraft !== list.name) onRenameList(nameDraft.trim());
+    else setNameDraft(list.name);
     setEditingName(false);
   }
 
@@ -287,22 +300,15 @@ function ListColumn({ list, onCardClick, onDrop, onDragOver, onCardDragStart, on
       <div style={{ maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', paddingRight: 2 }}>
         {list.cards.map((card) => (
           <CardItem key={card.id} card={card} onClick={() => onCardClick(card.id)}
-            onDragStart={(e) => onCardDragStart(card, list.id, e)} onDragEnd={onCardDragEnd}
-          />
+            onDragStart={(e) => onCardDragStart(card, list.id, e)} onDragEnd={onCardDragEnd} />
         ))}
       </div>
 
       {adding ? (
         <div style={{ padding: 6 }}>
-          <textarea autoFocus value={title} onChange={(e) => setTitle(e.target.value)}
-            placeholder="Nhập tiêu đề thẻ..."
+          <textarea autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Nhập tiêu đề thẻ..."
             style={{ width: '100%', padding: 8, borderRadius: 4, border: 'none', fontSize: 12, resize: 'vertical', minHeight: 50, boxSizing: 'border-box', fontFamily: 'inherit' }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                onAddCard(title); setTitle(''); setAdding(false);
-              }
-            }} />
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onAddCard(title); setTitle(''); setAdding(false); } }} />
           <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
             <button onClick={() => { onAddCard(title); setTitle(''); setAdding(false); }}
               style={{ background: '#6366f1', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: 4, fontSize: 12, cursor: 'pointer' }}>Thêm</button>
@@ -312,9 +318,7 @@ function ListColumn({ list, onCardClick, onDrop, onDragOver, onCardDragStart, on
         </div>
       ) : (
         <button onClick={() => setAdding(true)}
-          style={{ width: '100%', background: 'transparent', border: 'none', color: '#9a8fd0', padding: '8px 10px', textAlign: 'left', cursor: 'pointer', fontSize: 12, borderRadius: 4 }}>
-          + Thêm thẻ
-        </button>
+          style={{ width: '100%', background: 'transparent', border: 'none', color: '#9a8fd0', padding: '8px 10px', textAlign: 'left', cursor: 'pointer', fontSize: 12, borderRadius: 4 }}>+ Thêm thẻ</button>
       )}
     </div>
   );
@@ -342,7 +346,6 @@ function CardItem({ card, onClick, onDragStart, onDragEnd }) {
 function AddListButton({ onAdd }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
-
   if (adding) {
     return (
       <div style={{ background: 'rgba(15,8,32,0.85)', borderRadius: 8, padding: 8, minWidth: 260, maxWidth: 260, flexShrink: 0 }}>
@@ -360,9 +363,7 @@ function AddListButton({ onAdd }) {
   }
   return (
     <button onClick={() => setAdding(true)}
-      style={{ background: 'rgba(255,255,255,0.08)', border: '1px dashed rgba(255,255,255,0.2)', color: '#fff', padding: '10px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, minWidth: 240, height: 'fit-content', flexShrink: 0 }}>
-      + Thêm cột
-    </button>
+      style={{ background: 'rgba(255,255,255,0.08)', border: '1px dashed rgba(255,255,255,0.2)', color: '#fff', padding: '10px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 13, minWidth: 240, height: 'fit-content', flexShrink: 0 }}>+ Thêm cột</button>
   );
 }
 
@@ -370,8 +371,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
   const [card, setCard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [scoreLevels, setScoreLevels] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadQueue, setUploadQueue] = useState([]);
   const [lightbox, setLightbox] = useState(null);
 
   useEffect(() => { load(); loadScoreLevels(); }, [cardId]);
@@ -414,7 +414,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
       if (item.type.indexOf('image') === 0) {
         e.preventDefault();
         const blob = item.getAsFile();
-        await uploadImage(blob);
+        uploadInBackground(blob);
         return;
       }
     }
@@ -425,32 +425,43 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
     const files = e.dataTransfer.files;
     if (!files?.length) return;
     for (const file of files) {
-      if (file.type.startsWith('image/')) {
-        await uploadImage(file);
-      }
+      if (file.type.startsWith('image/')) uploadInBackground(file);
     }
   }
 
-  async function uploadImage(blob) {
+  async function uploadInBackground(blob) {
     const MAX = 15 * 1024 * 1024;
     if (blob.size > MAX) {
       alert(`Ảnh quá lớn (${(blob.size / 1024 / 1024).toFixed(1)}MB). Tối đa 15MB.`);
       return;
     }
 
-    setUploading(true);
-    setUploadProgress(0);
+    const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const previewUrl = URL.createObjectURL(blob);
 
-    const fd = new FormData();
-    fd.append('file', blob, blob.name || 'pasted-image.png');
-    fd.append('cardId', cardId);
+    setUploadQueue((q) => [...q, { tempId, previewUrl, progress: 0, name: blob.name || 'pasted-image' }]);
 
     try {
+      let uploadBlob = blob;
+      if (blob.size > 500 * 1024) {
+        try {
+          uploadBlob = await resizeImageClient(blob, 2400, 0.85);
+        } catch (err) {
+          console.warn('Resize failed, upload original:', err);
+          uploadBlob = blob;
+        }
+      }
+
+      const fd = new FormData();
+      fd.append('file', uploadBlob, (blob.name || 'image').replace(/\.[^.]+$/, '') + '.webp');
+      fd.append('cardId', cardId);
+
       const xhr = new XMLHttpRequest();
       const promise = new Promise((resolve, reject) => {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
-            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+            const progress = Math.round((e.loaded / e.total) * 100);
+            setUploadQueue((q) => q.map((u) => u.tempId === tempId ? { ...u, progress } : u));
           }
         };
         xhr.onload = () => {
@@ -463,12 +474,14 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
       });
 
       await promise;
+      URL.revokeObjectURL(previewUrl);
+      setUploadQueue((q) => q.filter((u) => u.tempId !== tempId));
       await load();
     } catch (e) {
-      alert('Lỗi upload: ' + e.message);
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
+      URL.revokeObjectURL(previewUrl);
+      setUploadQueue((q) => q.map((u) => u.tempId === tempId ? { ...u, error: true } : u));
+      setTimeout(() => setUploadQueue((q) => q.filter((u) => u.tempId !== tempId)), 4000);
+      console.error('Upload error:', e);
     }
   }
 
@@ -510,9 +523,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
           <div style={{ height: 200, position: 'relative', background: '#e4e4e7' }}>
             <img src={c.cover} alt="cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             <button onClick={() => updateField('cover', '')}
-              style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>
-              × Xóa ảnh bìa
-            </button>
+              style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>× Xóa ảnh bìa</button>
           </div>
         )}
 
@@ -522,32 +533,37 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
               onBlur={() => updateField('title', c.title)}
               style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 17, fontWeight: 500, color: '#1f1f1f', padding: 0, marginBottom: 12, boxSizing: 'border-box' }} />
 
-            <div style={{ border: '2px dashed #6366f1', borderRadius: 8, padding: 14, textAlign: 'center', marginBottom: 14, background: '#eef2ff', position: 'relative' }}>
-              {uploading ? (
-                <div>
-                  <div style={{ fontSize: 13, color: '#6366f1', marginBottom: 8, fontWeight: 500 }}>⏳ Đang upload... {uploadProgress}%</div>
-                  <div style={{ height: 6, background: '#ddd6fe', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${uploadProgress}%`, background: '#6366f1', transition: 'width 0.2s' }} />
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div style={{ fontSize: 20, marginBottom: 4 }}>📎</div>
-                  <div style={{ fontSize: 13, color: '#4338ca', fontWeight: 500, marginBottom: 2 }}>Paste ảnh (Ctrl+V), kéo-thả, hoặc chọn file</div>
-                  <div style={{ fontSize: 11, color: '#6366f1', marginBottom: 6 }}>Tối đa 15MB · Tự tạo thumbnail</div>
-                  <input type="file" accept="image/*" multiple onChange={(e) => {
-                    const files = Array.from(e.target.files || []);
-                    files.forEach((f) => uploadImage(f));
-                  }}
-                    style={{ fontSize: 11 }} />
-                </>
-              )}
+            <div style={{ border: '2px dashed #6366f1', borderRadius: 8, padding: 14, textAlign: 'center', marginBottom: 14, background: '#eef2ff' }}>
+              <div style={{ fontSize: 20, marginBottom: 4 }}>📎</div>
+              <div style={{ fontSize: 13, color: '#4338ca', fontWeight: 500, marginBottom: 2 }}>Paste ảnh (Ctrl+V), kéo-thả, hoặc chọn file</div>
+              <div style={{ fontSize: 11, color: '#6366f1', marginBottom: 6 }}>Tối đa 15MB · Tự động nén + upload nền</div>
+              <input type="file" accept="image/*" multiple onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                files.forEach((f) => uploadInBackground(f));
+                e.target.value = '';
+              }} style={{ fontSize: 11 }} />
             </div>
 
-            {attachments.length > 0 && (
+            {(uploadQueue.length > 0 || attachments.length > 0) && (
               <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 500, color: '#52525b', marginBottom: 6 }}>📎 Ảnh đính kèm ({attachments.length})</div>
+                <div style={{ fontSize: 12, fontWeight: 500, color: '#52525b', marginBottom: 6 }}>
+                  📎 Ảnh đính kèm ({attachments.length}{uploadQueue.length > 0 ? ` · ${uploadQueue.length} đang upload` : ''})
+                </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 6 }}>
+                  {uploadQueue.map((u) => (
+                    <div key={u.tempId} style={{ position: 'relative', aspectRatio: '1', background: '#fff', borderRadius: 6, overflow: 'hidden', border: '1px solid #c7d2fe' }}>
+                      <img src={u.previewUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: u.error ? 0.3 : 0.7 }} />
+                      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(99,102,241,0.15)' }}>
+                        {u.error ? (
+                          <div style={{ background: '#ef4444', color: '#fff', fontSize: 10, padding: '3px 8px', borderRadius: 4 }}>Lỗi upload</div>
+                        ) : (
+                          <div style={{ background: 'rgba(255,255,255,0.95)', padding: '4px 8px', borderRadius: 10, fontSize: 10, fontWeight: 500, color: '#4338ca' }}>
+                            ⏳ {u.progress}%
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                   {attachments.map((att) => (
                     <div key={att.id} style={{ position: 'relative', aspectRatio: '1', background: '#fff', borderRadius: 6, overflow: 'hidden', border: '1px solid #e4e4e7' }}>
                       <img src={att.thumbUrl} alt={att.name} loading="lazy"
@@ -579,9 +595,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
                   <select value={c.designerId || ''} onChange={(e) => updateField('designerId', e.target.value)}
                     style={{ width: '100%', padding: 6, borderRadius: 4, border: '1px solid #d4d4d8', fontSize: 12, marginTop: 2, color: '#1f1f1f' }}>
                     <option value="">-- Chọn designer --</option>
-                    {(boardMembers || []).map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
+                    {(boardMembers || []).map((d) => (<option key={d.id} value={d.id}>{d.name}</option>))}
                   </select>
                 </div>
                 <div>
@@ -589,9 +603,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
                   <select value={c.scoreLevel || ''} onChange={(e) => updateField('scoreLevel', e.target.value)}
                     style={{ width: '100%', padding: 6, borderRadius: 4, border: '1px solid #d4d4d8', fontSize: 12, marginTop: 2, color: '#1f1f1f' }}>
                     <option value="">-- Chọn mức --</option>
-                    {scoreLevels.map((lv) => (
-                      <option key={lv.id} value={lv.id}>{lv.name} ({lv.points}đ)</option>
-                    ))}
+                    {scoreLevels.map((lv) => (<option key={lv.id} value={lv.id}>{lv.name} ({lv.points}đ)</option>))}
                   </select>
                 </div>
               </div>
@@ -601,9 +613,7 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
                 </div>
               )}
               {c.scored !== '1' && (
-                <div style={{ marginTop: 6, fontSize: 11, color: '#71717a' }}>
-                  💡 Kéo thẻ vào cột "Done" sẽ tự động tính điểm
-                </div>
+                <div style={{ marginTop: 6, fontSize: 11, color: '#71717a' }}>💡 Kéo thẻ vào cột "Done" sẽ tự động tính điểm</div>
               )}
             </div>
           </div>
@@ -628,11 +638,9 @@ function CardModal({ cardId, onClose, me, boardMembers }) {
         </div>
 
         <div style={{ padding: '10px 22px', borderTop: '1px solid #e4e4e7', background: '#fafafa', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ fontSize: 11, color: '#71717a' }}>Tip: <b>Ctrl+V</b> hoặc kéo-thả ảnh</div>
+          <div style={{ fontSize: 11, color: '#71717a' }}>Tip: <b>Ctrl+V</b> hoặc kéo-thả ảnh · Upload nền tự động</div>
           <button onClick={onClose}
-            style={{ background: '#6366f1', border: 'none', color: '#fff', padding: '8px 18px', borderRadius: 5, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-            Đóng
-          </button>
+            style={{ background: '#6366f1', border: 'none', color: '#fff', padding: '8px 18px', borderRadius: 5, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>Đóng</button>
         </div>
       </div>
     </div>
