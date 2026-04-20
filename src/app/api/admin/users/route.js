@@ -1,14 +1,12 @@
-// /api/admin/users/route.js
-// GET  /api/admin/users          → list tất cả user + phân loại pending/approved
-// POST /api/admin/users/approve  → duyệt user (body: { uid, role, features })
-// POST /api/admin/users/disable  → vô hiệu hóa
-// PATCH /api/admin/users/[uid]   → sửa role/features của user đã duyệt
+// /api/admin/users/route.js (FIXED v2)
 import { NextResponse } from 'next/server';
 import {
   redis,
   USER_STATUS,
   SYSTEM_ROLES,
   ROLE_FEATURE_PRESETS,
+  parseFeatures,
+  serializeFeatures,
 } from '@/lib/nbecom-schema';
 import { requireAdmin, jsonError, jsonOk } from '@/lib/auth';
 
@@ -25,7 +23,7 @@ export async function GET(req) {
       return {
         id: uid,
         ...safe,
-        features: u.features ? JSON.parse(u.features) : [],
+        features: parseFeatures(u.features),
       };
     })
   );
@@ -38,7 +36,6 @@ export async function GET(req) {
   });
 }
 
-// POST /api/admin/users → action = approve | disable | enable | setRole
 export async function POST(req) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
@@ -59,7 +56,7 @@ export async function POST(req) {
     await redis.hset(`user:${uid}`, {
       status: USER_STATUS.APPROVED,
       role: r,
-      features: JSON.stringify(f),
+      features: serializeFeatures(f),
     });
     await redis.srem('users:pending', uid);
     return jsonOk();
@@ -78,7 +75,7 @@ export async function POST(req) {
   if (action === 'setRole') {
     const r = role || user.role;
     const updates = { role: r };
-    if (Array.isArray(features)) updates.features = JSON.stringify(features);
+    if (Array.isArray(features)) updates.features = serializeFeatures(features);
     await redis.hset(`user:${uid}`, updates);
     return jsonOk();
   }
