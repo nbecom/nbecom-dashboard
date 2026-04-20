@@ -1,43 +1,5 @@
 // ============================================================
-// NBECOM v6.0 - BOARDS & SCORING SCHEMA
-// ============================================================
-// REDIS KEYS:
-//
-// AUTH & PERMISSION:
-// user:{uid}                → Hash { email, name, role, status, features, createdAt, avatar }
-// users:all                 → Set of uid
-// users:pending             → Set of uid
-// email:{email}             → String: uid
-// session:{token}           → String: uid (TTL 7d)
-//
-// BOARDS:
-// board:{bid}               → Hash { name, bg, icon, ownerId, createdAt }
-// boards:all                → Set of bid
-// board:{bid}:members       → Hash { uid: "owner|editor|viewer" }
-// board:{bid}:lists         → List (ordered): [lid, lid, ...]
-// user:{uid}:boards         → Set of bid  (index ngược)
-//
-// LISTS:
-// list:{lid}                → Hash { boardId, name, order, isDone }
-// list:{lid}:cards          → List (ordered): [cid, cid, ...]
-//
-// CARDS:
-// card:{cid}                → Hash { listId, boardId, title, desc, cover,
-//                                    designerId, scoreLevel, scored,
-//                                    scoredAt, scoredBy, createdAt, createdBy }
-// card:{cid}:attachments    → Set of attId
-// card:{cid}:members        → Set of uid
-// card:{cid}:lockedTo       → Set of uid (card-level lock)
-// card:{cid}:comments       → List of json
-// card:{cid}:activity       → List of json (200 mới nhất)
-//
-// ATTACHMENTS:
-// att:{attId}               → Hash { cardId, url, thumbUrl, mediumUrl, name, size, uploadedBy, uploadedAt }
-//
-// SCORING:
-// scorelevels               → Hash { levelId: json({ id, name, points, color, order }) }
-// score:{uid}:{yyyy-mm}     → List of json({ cardId, points, levelId, at, by })
-// score:{uid}:{yyyy-mm}:total → Number (cache tổng điểm tháng)
+// NBECOM v6.0 - BOARDS & SCORING SCHEMA (FIXED)
 // ============================================================
 
 import { Redis } from '@upstash/redis';
@@ -79,7 +41,6 @@ export const FEATURES = {
   SCORE_SETTINGS: 'score_settings',
 };
 
-// Preset features cho từng role
 export const ROLE_FEATURE_PRESETS = {
   admin: Object.values(FEATURES),
   manager: [
@@ -95,7 +56,6 @@ export const ROLE_FEATURE_PRESETS = {
   ],
 };
 
-// Mức điểm mặc định (Bin có thể chỉnh trong admin)
 export const DEFAULT_SCORE_LEVELS = [
   { id: 'lv_small', name: 'Mẫu 0.25đ', points: 0.25, color: '#97C459', order: 1 },
   { id: 'lv_normal', name: 'Mẫu 2đ', points: 2, color: '#378ADD', order: 2 },
@@ -115,6 +75,29 @@ export function monthKey(date = new Date()) {
   return `${y}-${m}`;
 }
 
+// Helper an toàn để parse JSON, không crash nếu string lỗi
+function safeJsonParse(str, fallback = null) {
+  if (!str) return fallback;
+  if (typeof str !== 'string') return str; // Đã là object rồi
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
+// Upstash Redis đôi khi trả về object đã parse sẵn, đôi khi là string
+// Hàm này xử lý cả 2 trường hợp
+function normalizeFeatures(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = safeJsonParse(raw, []);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+  return [];
+}
+
 // ---------------- User helpers ----------------
 
 export async function getUser(uid) {
@@ -124,7 +107,7 @@ export async function getUser(uid) {
   return {
     id: uid,
     ...u,
-    features: u.features ? JSON.parse(u.features) : [],
+    features: normalizeFeatures(u.features),
   };
 }
 
@@ -138,7 +121,7 @@ export async function hasFeature(uid, feature) {
   const u = await getUser(uid);
   if (!u) return false;
   if (u.status !== USER_STATUS.APPROVED) return false;
-  if (u.role === SYSTEM_ROLES.ADMIN) return true; // admin có mọi feature
+  if (u.role === SYSTEM_ROLES.ADMIN) return true; // Admin luôn có mọi feature
   return (u.features || []).includes(feature);
 }
 
@@ -174,7 +157,7 @@ export async function canManageBoard(uid, bid) {
   return (await getBoardRole(uid, bid)) === BOARD_ROLES.OWNER;
 }
 
-// ---------------- Card permission (tầng 3) ----------------
+// ---------------- Card permission ----------------
 
 export async function canViewCard(uid, cid) {
   const card = await redis.hgetall(`card:${cid}`);
@@ -211,13 +194,17 @@ export async function logActivity(cid, uid, action, meta = {}) {
 export async function getScoreLevels() {
   const raw = await redis.hgetall('scorelevels');
   if (!raw || Object.keys(raw).length === 0) {
-    // Khởi tạo mặc định
     const pipe = redis.pipeline();
-    DEFAULT_SCORE_LEVELS.forEach((lv) => pipe.hset('scorelevels', { [lv.id]: JSON.stringify(lv) }));
+    DEFAULT_SCORE_LEVELS.forEach((lv) => {
+      pipe.hset('scorelevels', { [lv.id]: JSON.stringify(lv) });
+    });
     await pipe.exec();
     return [...DEFAULT_SCORE_LEVELS];
   }
-  const levels = Object.values(raw).map((s) => (typeof s === 'string' ? JSON.parse(s) : s));
+  const levels = Object.values(raw).map((s) => {
+    if (typeof s === 'string') return safeJsonParse(s, null);
+    return s;
+  }).filter(Boolean);
   return levels.sort((a, b) => (a.order || 0) - (b.order || 0));
 }
 
@@ -231,11 +218,6 @@ export async function deleteScoreLevel(levelId) {
   await redis.hdel('scorelevels', levelId);
 }
 
-/**
- * Tự động tính điểm khi card chuyển sang list "Done"
- * - Chỉ tính 1 lần (flag scored)
- * - Chỉ tính nếu có designerId và scoreLevel
- */
 export async function tryAutoScoreCard(cid) {
   const card = await redis.hgetall(`card:${cid}`);
   if (!card || card.scored === '1') return { scored: false, reason: 'already_scored_or_missing' };
@@ -243,13 +225,11 @@ export async function tryAutoScoreCard(cid) {
     return { scored: false, reason: 'missing_designer_or_level' };
   }
 
-  // Lấy list hiện tại, xem có phải Done không
   const list = await redis.hgetall(`list:${card.listId}`);
   if (!list?.name) return { scored: false, reason: 'no_list' };
   const isDone = list.isDone === '1' || /done|ho[àa]n th[àa]nh/i.test(list.name);
   if (!isDone) return { scored: false, reason: 'not_done_column' };
 
-  // Lấy mức điểm
   const levels = await getScoreLevels();
   const level = levels.find((l) => l.id === card.scoreLevel);
   if (!level) return { scored: false, reason: 'invalid_level' };
@@ -287,13 +267,10 @@ export async function tryAutoScoreCard(cid) {
 export async function getDesignerMonthlyScore(uid, mk = monthKey()) {
   const total = await redis.get(`score:${uid}:${mk}:total`);
   const raw = await redis.lrange(`score:${uid}:${mk}`, 0, -1);
-  const entries = raw
+  const entries = (raw || [])
     .map((r) => {
-      try {
-        return typeof r === 'string' ? JSON.parse(r) : r;
-      } catch {
-        return null;
-      }
+      if (typeof r === 'string') return safeJsonParse(r, null);
+      return r;
     })
     .filter(Boolean);
   return {
