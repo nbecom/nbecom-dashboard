@@ -1,9 +1,7 @@
-// /api/boards/[id]/route.js
 import { NextResponse } from 'next/server';
 import { redis, canViewBoard, canManageBoard } from '@/lib/nbecom-schema';
 import { requireAuth, jsonError, jsonOk } from '@/lib/auth';
 
-// GET /api/boards/:id → full board data
 export async function GET(req, { params }) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
@@ -14,60 +12,89 @@ export async function GET(req, { params }) {
     return jsonError('Không có quyền xem board này', 403);
   }
 
-  const board = await redis.hgetall(`board:${bid}`);
+  const [board, listIds, membersRaw] = await Promise.all([
+    redis.hgetall(`board:${bid}`),
+    redis.lrange(`board:${bid}:lists`, 0, -1),
+    redis.hgetall(`board:${bid}:members`),
+  ]);
+
   if (!board?.name) return jsonError('Board không tồn tại', 404);
 
-  const listIds = await redis.lrange(`board:${bid}:lists`, 0, -1);
-  const lists = await Promise.all(
-    (listIds || []).map(async (lid) => {
-      const list = await redis.hgetall(`list:${lid}`);
-      if (!list?.name) return null;
-      const cardIds = await redis.lrange(`list:${lid}:cards`, 0, -1);
-      const cards = await Promise.all(
-        (cardIds || []).map(async (cid) => {
-          const c = await redis.hgetall(`card:${cid}`);
-          if (!c?.title) return null;
-          const attCount = await redis.scard(`card:${cid}:attachments`);
-          return {
-            id: cid,
-            ...c,
-            attachmentCount: attCount,
-          };
-        })
-      );
-      return {
-        id: lid,
-        ...list,
-        cards: cards.filter(Boolean),
-      };
-    })
-  );
+  const validListIds = listIds || [];
+  let lists = [];
+  let allCardIds = [];
+  let cardIdsByList = {};
 
-  // Member list + role của mình
-  const membersRaw = await redis.hgetall(`board:${bid}:members`);
+  if (validListIds.length > 0) {
+    const listPipe = redis.pipeline();
+    validListIds.forEach((lid) => {
+      listPipe.hgetall(`list:${lid}`);
+      listPipe.lrange(`list:${lid}:cards`, 0, -1);
+    });
+    const listResults = await listPipe.exec();
+
+    for (let i = 0; i < validListIds.length; i++) {
+      const lid = validListIds[i];
+      const listData = listResults[i * 2];
+      const cardIds = listResults[i * 2 + 1] || [];
+      if (!listData?.name) continue;
+      cardIdsByList[lid] = cardIds;
+      allCardIds = allCardIds.concat(cardIds);
+      lists.push({ id: lid, ...listData, cards: [] });
+    }
+  }
+
+  let cardsById = {};
+  if (allCardIds.length > 0) {
+    const cardPipe = redis.pipeline();
+    allCardIds.forEach((cid) => {
+      cardPipe.hgetall(`card:${cid}`);
+      cardPipe.scard(`card:${cid}:attachments`);
+    });
+    const cardResults = await cardPipe.exec();
+
+    for (let i = 0; i < allCardIds.length; i++) {
+      const cid = allCardIds[i];
+      const cardData = cardResults[i * 2];
+      const attCount = cardResults[i * 2 + 1] || 0;
+      if (!cardData?.title) continue;
+      cardsById[cid] = { id: cid, ...cardData, attachmentCount: attCount };
+    }
+  }
+
+  lists = lists.map((list) => ({
+    ...list,
+    cards: (cardIdsByList[list.id] || [])
+      .map((cid) => cardsById[cid])
+      .filter(Boolean),
+  }));
+
   const memberIds = Object.keys(membersRaw || {});
-  const members = await Promise.all(
-    memberIds.map(async (mid) => {
-      const mu = await redis.hgetall(`user:${mid}`);
-      return {
+  let members = [];
+  if (memberIds.length > 0) {
+    const memPipe = redis.pipeline();
+    memberIds.forEach((mid) => memPipe.hgetall(`user:${mid}`));
+    const memResults = await memPipe.exec();
+    members = memberIds.map((mid, i) => {
+      const mu = memResults[i];
+      return mu?.email ? {
         id: mid,
-        name: mu?.name,
-        email: mu?.email,
-        avatar: mu?.avatar,
+        name: mu.name,
+        email: mu.email,
+        avatar: mu.avatar,
         role: membersRaw[mid],
-      };
-    })
-  );
+      } : null;
+    }).filter(Boolean);
+  }
 
   return NextResponse.json({
     board: { id: bid, ...board },
-    lists: lists.filter(Boolean),
+    lists,
     members,
     canManage: await canManageBoard(user.id, bid),
   });
 }
 
-// DELETE /api/boards/:id
 export async function DELETE(req, { params }) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
@@ -78,26 +105,33 @@ export async function DELETE(req, { params }) {
     return jsonError('Chỉ Owner được xóa board', 403);
   }
 
-  // Xóa toàn bộ lists + cards liên quan
   const listIds = (await redis.lrange(`board:${bid}:lists`, 0, -1)) || [];
+  const allCardIds = [];
+  if (listIds.length > 0) {
+    const cardPipe = redis.pipeline();
+    listIds.forEach((lid) => cardPipe.lrange(`list:${lid}:cards`, 0, -1));
+    const results = await cardPipe.exec();
+    results.forEach((cids) => {
+      if (Array.isArray(cids)) allCardIds.push(...cids);
+    });
+  }
+
   const pipe = redis.pipeline();
+  for (const cid of allCardIds) {
+    pipe.del(`card:${cid}`);
+    pipe.del(`card:${cid}:attachments`);
+    pipe.del(`card:${cid}:members`);
+    pipe.del(`card:${cid}:lockedTo`);
+    pipe.del(`card:${cid}:comments`);
+    pipe.del(`card:${cid}:activity`);
+  }
   for (const lid of listIds) {
-    const cardIds = (await redis.lrange(`list:${lid}:cards`, 0, -1)) || [];
-    for (const cid of cardIds) {
-      pipe.del(`card:${cid}`);
-      pipe.del(`card:${cid}:attachments`);
-      pipe.del(`card:${cid}:members`);
-      pipe.del(`card:${cid}:lockedTo`);
-      pipe.del(`card:${cid}:comments`);
-      pipe.del(`card:${cid}:activity`);
-    }
     pipe.del(`list:${lid}`);
     pipe.del(`list:${lid}:cards`);
   }
   pipe.del(`board:${bid}`);
   pipe.del(`board:${bid}:lists`);
 
-  // Xóa khỏi user:{uid}:boards của tất cả member
   const membersRaw = await redis.hgetall(`board:${bid}:members`);
   Object.keys(membersRaw || {}).forEach((mid) => {
     pipe.srem(`user:${mid}:boards`, bid);
@@ -109,7 +143,6 @@ export async function DELETE(req, { params }) {
   return jsonOk();
 }
 
-// PATCH /api/boards/:id → đổi tên, bg, icon
 export async function PATCH(req, { params }) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
