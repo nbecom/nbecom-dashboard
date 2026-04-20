@@ -1,5 +1,5 @@
 // ============================================================
-// API: /api/auth/register, /api/auth/login, /api/auth/logout, /api/auth/me
+// AUTH HANDLERS (FIXED v2) - dùng serializeFeatures
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -12,6 +12,7 @@ import {
   USER_STATUS,
   SYSTEM_ROLES,
   ROLE_FEATURE_PRESETS,
+  serializeFeatures,
 } from '@/lib/nbecom-schema';
 import { getCurrentUser, jsonError, jsonOk } from '@/lib/auth';
 
@@ -19,19 +20,14 @@ function hashPw(pw) {
   return crypto.createHash('sha256').update(pw + 'nbecom_salt_v6').digest('hex');
 }
 
-// ---------- POST /api/auth/register ----------
 export async function register(req) {
   const body = await req.json();
   const email = (body.email || '').toLowerCase().trim();
   const name = (body.name || '').trim();
   const password = body.password || '';
 
-  if (!email || !name || !password) {
-    return jsonError('Thiếu email, tên hoặc mật khẩu');
-  }
-  if (password.length < 6) {
-    return jsonError('Mật khẩu tối thiểu 6 ký tự');
-  }
+  if (!email || !name || !password) return jsonError('Thiếu email, tên hoặc mật khẩu');
+  if (password.length < 6) return jsonError('Mật khẩu tối thiểu 6 ký tự');
 
   const existed = await getUserByEmail(email);
   if (existed) return jsonError('Email đã tồn tại', 409);
@@ -43,12 +39,9 @@ export async function register(req) {
     email,
     name,
     password: hashPw(password),
-    // User đầu tiên tự động là Admin đã duyệt
     role: isFirstUser ? SYSTEM_ROLES.ADMIN : SYSTEM_ROLES.DESIGNER,
     status: isFirstUser ? USER_STATUS.APPROVED : USER_STATUS.PENDING,
-    features: JSON.stringify(
-      isFirstUser ? ROLE_FEATURE_PRESETS.admin : []
-    ),
+    features: serializeFeatures(isFirstUser ? ROLE_FEATURE_PRESETS.admin : []),
     createdAt: String(Date.now()),
     avatar: name.slice(0, 2).toUpperCase(),
   };
@@ -68,7 +61,6 @@ export async function register(req) {
   });
 }
 
-// ---------- POST /api/auth/login ----------
 export async function login(req) {
   const body = await req.json();
   const email = (body.email || '').toLowerCase().trim();
@@ -90,7 +82,6 @@ export async function login(req) {
     return jsonError('Tài khoản đã bị vô hiệu hóa', 403);
   }
 
-  // Tạo session
   const token = crypto.randomBytes(32).toString('hex');
   await redis.set(`session:${token}`, uid, { ex: 60 * 60 * 24 * 7 });
 
@@ -112,7 +103,6 @@ export async function login(req) {
   return res;
 }
 
-// ---------- POST /api/auth/logout ----------
 export async function logout(req) {
   const token = req.cookies.get('nb_session')?.value;
   if (token) await redis.del(`session:${token}`);
@@ -121,7 +111,6 @@ export async function logout(req) {
   return res;
 }
 
-// ---------- GET /api/auth/me ----------
 export async function me(req) {
   const user = await getCurrentUser(req);
   if (!user) return jsonError('Chưa đăng nhập', 401);
