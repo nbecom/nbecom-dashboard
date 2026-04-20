@@ -37,19 +37,23 @@ export async function POST(req) {
     const buffer = Buffer.from(bytes);
 
     const imageId = genId('img_');
-    const ext = 'webp';
     const prefix = `boards/${card.boardId}/${cardId}/${imageId}`;
 
-    const [thumb, medium, full] = await Promise.all([
-      sharp(buffer).resize(300, 300, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 80 }).toBuffer(),
-      sharp(buffer).resize(1000, 1000, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 85 }).toBuffer(),
-      sharp(buffer).webp({ quality: 90 }).toBuffer(),
+    const base = sharp(buffer, { failOn: 'none' }).rotate();
+
+    const [thumbBuf, mediumBuf, fullBuf] = await Promise.all([
+      base.clone().resize(300, 300, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 70, effort: 2 }).toBuffer(),
+      base.clone().resize(1000, 1000, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 78, effort: 2 }).toBuffer(),
+      base.clone().resize(2400, 2400, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 82, effort: 2 }).toBuffer(),
     ]);
 
     const [thumbUrl, mediumUrl, fullUrl] = await Promise.all([
-      uploadToR2(`${prefix}/thumb.${ext}`, thumb, 'image/webp'),
-      uploadToR2(`${prefix}/medium.${ext}`, medium, 'image/webp'),
-      uploadToR2(`${prefix}/full.${ext}`, full, 'image/webp'),
+      uploadToR2(`${prefix}/thumb.webp`, thumbBuf, 'image/webp'),
+      uploadToR2(`${prefix}/medium.webp`, mediumBuf, 'image/webp'),
+      uploadToR2(`${prefix}/full.webp`, fullBuf, 'image/webp'),
     ]);
 
     const attId = imageId;
@@ -73,7 +77,7 @@ export async function POST(req) {
     }
     await pipe.exec();
 
-    await logActivity(cardId, user.id, 'upload_image', { name: file.name, size: file.size });
+    logActivity(cardId, user.id, 'upload_image', { name: file.name, size: file.size }).catch(() => {});
 
     return NextResponse.json({
       ok: true,
@@ -102,15 +106,18 @@ export async function DELETE(req) {
     }
 
     const { deleteFromR2, extractKeyFromUrl } = await import('@/lib/r2-client');
+    const card = await redis.hgetall(`card:${att.cardId}`);
+
+    const deletePromises = [];
     for (const url of [att.url, att.thumbUrl, att.mediumUrl]) {
       const key = extractKeyFromUrl(url);
-      if (key) await deleteFromR2(key);
+      if (key) deletePromises.push(deleteFromR2(key));
     }
+    await Promise.all(deletePromises);
 
     const pipe = redis.pipeline();
     pipe.del(`att:${attId}`);
     pipe.srem(`card:${att.cardId}:attachments`, attId);
-    const card = await redis.hgetall(`card:${att.cardId}`);
     if (card?.cover === att.mediumUrl) {
       pipe.hset(`card:${att.cardId}`, { cover: '', coverThumb: '' });
     }
